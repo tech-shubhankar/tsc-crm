@@ -10,6 +10,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js" onerror="this.remove()"></script>
+<!-- For real, direct-download PDFs (no print dialog) and PDF file sharing -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   :root{
     --ink:#1B2430; --ink-soft:#2C394A;
@@ -18476,6 +18479,63 @@ function QuotationForm({ data, company, actions, openDoc, editing, onClose }) {
                 React.createElement("button", { className: "btn", onClick: onClose }, "Cancel"),
                 React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : (editing ? 'Save Changes' : 'Save Quotation'))))));
 }
+/* ---------- Real PDF generation (renders the invoice, no print dialog) ---------- */
+async function generateDocPdfBlob(elementId) {
+    const el = document.getElementById(elementId);
+    if (!el)
+        throw new Error("Couldn't find the document to render.");
+    const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+    const imgData = canvas.toDataURL('image/png');
+    const { jsPDF } = window.jspdf;
+    const pxToPt = 0.75; // 96dpi px -> pt, then we scale canvas back down (scale:2 above)
+    const pageWidth = (canvas.width / 2) * pxToPt;
+    const pageHeight = (canvas.height / 2) * pxToPt;
+    const pdf = new jsPDF({ unit: 'pt', format: [pageWidth, pageHeight] });
+    pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight);
+    return pdf.output('blob');
+}
+/* ---------- WhatsApp share ---------- */
+function normalizeIndianPhone(mobile) {
+    const digits = (mobile || '').replace(/\D/g, '');
+    if (!digits)
+        return '';
+    if (digits.length === 10)
+        return '91' + digits;
+    if (digits.length > 10)
+        return digits;
+    return '';
+}
+function buildShareText(doc, company, isInvoice) {
+    const lines = [];
+    lines.push(`*${company.name}*`);
+    lines.push(`${isInvoice ? 'Tax Invoice' : 'Quotation'}: *${doc.number}*`);
+    lines.push(`Date: ${dLabel(doc.date)}`);
+    lines.push(`Customer: ${doc.customer_name}`);
+    lines.push('');
+    doc.items.forEach(it => {
+        lines.push(`${it.name} — ${it.qty} x ${fmt(it.rate)} = ${money(company, it.qty * it.rate)}`);
+    });
+    lines.push('');
+    lines.push(`Subtotal: ${money(company, doc.sub)}`);
+    if (Number(doc.discount) > 0)
+        lines.push(`Discount (${doc.discount}%): -${money(company, doc.disc_amt)}`);
+    if (doc.gst_split)
+        lines.push(`SGST + CGST: +${money(company, doc.sgst_amt + doc.cgst_amt)}`);
+    else if (Number(doc.tax) > 0)
+        lines.push(`Tax/GST (${doc.tax}%): +${money(company, doc.tax_amt)}`);
+    lines.push(`*Total: ${money(company, doc.total)}*`);
+    if (isInvoice && doc.payment_type === 'Advance') {
+        const paid = Number(doc.advance_paid || 0);
+        lines.push(`Advance paid: ${money(company, paid)}`);
+        lines.push(`*Balance due: ${money(company, Math.max(doc.total - paid, 0))}*`);
+    }
+    if (isInvoice && doc.cancelled)
+        lines.push('\n*THIS INVOICE IS CANCELLED*');
+    if (doc.remarks)
+        lines.push(`\nRemarks: ${doc.remarks}`);
+    lines.push('\nThank you for your business!');
+    return lines.join('\n');
+}
 /* ---------- Full-page document view (invoice / quotation) ---------- */
 function DocFullPage({ type, doc, company, actions, onClose }) {
     const isInvoice = type === 'invoice';
@@ -18505,13 +18565,64 @@ function DocFullPage({ type, doc, company, actions, onClose }) {
             return;
         downloadAsWord(`${doc.number}.doc`, el.innerHTML, doc.number);
     };
+    const [pdfBusy, setPdfBusy] = useState(false);
+    const [waBusy, setWaBusy] = useState(false);
+    const downloadPdf = async () => {
+        setPdfBusy(true);
+        try {
+            const blob = await generateDocPdfBlob('doc-sheet-content');
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${doc.number}.pdf`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+        catch (err) {
+            alert("Couldn't generate the PDF: " + err.message);
+        }
+        finally {
+            setPdfBusy(false);
+        }
+    };
+    const shareOnWhatsApp = async () => {
+        const text = buildShareText(doc, company, isInvoice);
+        setWaBusy(true);
+        try {
+            try {
+                const blob = await generateDocPdfBlob('doc-sheet-content');
+                const file = new File([blob], `${doc.number}.pdf`, { type: 'application/pdf' });
+                if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                    await navigator.share({ files: [file], title: doc.number, text });
+                    return;
+                }
+            }
+            catch (err) { /* PDF generation or file-share unsupported — fall back below */ }
+            if (navigator.share) {
+                try {
+                    await navigator.share({ title: doc.number, text });
+                    return;
+                }
+                catch (err) {
+                    if (err && err.name === 'AbortError')
+                        return;
+                }
+            }
+            const phone = normalizeIndianPhone(doc.customer_mobile);
+            window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, '_blank');
+        }
+        finally {
+            setWaBusy(false);
+        }
+    };
     return (React.createElement("div", { className: "doc-page-shell" },
         React.createElement("div", { className: "doc-page-bar" },
             React.createElement("button", { className: "btn", onClick: onClose }, "\u2190 Back"),
             React.createElement("div", { className: "flex gap-8", style: { flexWrap: 'wrap' } },
                 React.createElement("button", { className: "btn", onClick: () => setChangingTheme(v => !v) }, "\uD83C\uDFA8 Change Theme"),
+                React.createElement("button", { className: "btn", style: { background: '#25D366', borderColor: '#25D366', color: '#fff' }, onClick: shareOnWhatsApp, disabled: waBusy }, waBusy ? 'Preparing…' : '💬 Share on WhatsApp'),
                 React.createElement("button", { className: "btn", onClick: () => window.print() }, "\uD83D\uDDA8 Print"),
-                React.createElement("button", { className: "btn", onClick: () => window.print() }, "\u2B07 Download PDF"),
+                React.createElement("button", { className: "btn", onClick: downloadPdf, disabled: pdfBusy }, pdfBusy ? 'Generating…' : '⬇ Download PDF'),
                 React.createElement("button", { className: "btn btn-primary", onClick: wordExport }, "\uD83D\uDCC4 Download Word"))),
         changingTheme && (React.createElement("div", { style: { background: 'var(--paper-card)', borderBottom: '1px solid var(--line)', padding: '12px 24px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
             React.createElement("select", { value: themePick, onChange: e => setThemePick(e.target.value), style: { width: 220 } }, THEMES.map(t => React.createElement("option", { key: t.id, value: t.id }, t.label))),
