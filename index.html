@@ -9,10 +9,6 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
-<!-- Optional: if you host this app (e.g. on GitHub Pages) and upload a
-     firebase-config.js file alongside it, visitors won't need to paste
-     the config manually — see firebase-config.example.js for the format.
-     If this file doesn't exist, it's simply ignored (no error). -->
 <script src="firebase-config.js" onerror="this.remove()"></script>
 <style>
   :root{
@@ -17592,12 +17588,36 @@ const TABLES = ['technicians', 'invoices', 'quotations', 'collections', 'deposit
     'main_stock', 'stock_issues', 'stock_usage', 'stock_returns', 'catalog', 'main_stock_adjustments'];
 const companyRef = (companyId) => db.collection('companies').doc(companyId);
 const tableRef = (companyId, table) => companyRef(companyId).collection(table);
-async function loadCompanyData(companyId) {
-    const results = await Promise.all(TABLES.map(t => tableRef(companyId, t).get()));
+const ADMIN_ONLY_TABLES = ['office_cash', 'main_stock', 'main_stock_adjustments', 'catalog', 'stock_issues'];
+const TECH_SCOPED_TABLES = ['collections', 'deposits', 'stock_usage', 'stock_returns'];
+async function loadCompanyData(companyId, myRole, myTechnicianId) {
+    const isTech = myRole === 'technician';
+    const tablesToLoad = isTech ? TABLES.filter(t => !ADMIN_ONLY_TABLES.includes(t)) : TABLES;
+    const results = await Promise.all(tablesToLoad.map(t => {
+        let ref = tableRef(companyId, t);
+        if (isTech && TECH_SCOPED_TABLES.includes(t))
+            ref = ref.where('tech_id', '==', myTechnicianId);
+        return ref.get();
+    }));
     const out = {};
-    TABLES.forEach((t, i) => { out[t] = results[i].docs.map(d => ({ id: d.id, ...d.data() })); });
-    const logSnap = await tableRef(companyId, 'activity_log').orderBy('ts', 'desc').limit(500).get();
-    out.activity_log = logSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    tablesToLoad.forEach((t, i) => { out[t] = results[i].docs.map(d => ({ id: d.id, ...d.data() })); });
+    // fill in empty arrays for tables a technician can't see, so components don't break
+    TABLES.forEach(t => { if (!(t in out))
+        out[t] = []; });
+    if (isTech) {
+        // Technicians only see their own technician doc, not the full roster.
+        if (myTechnicianId) {
+            const snap = await tableRef(companyId, 'technicians').doc(myTechnicianId).get();
+            out.technicians = snap.exists ? [{ id: snap.id, ...snap.data() }] : [];
+        }
+        else
+            out.technicians = [];
+        out.activity_log = [];
+    }
+    else {
+        const logSnap = await tableRef(companyId, 'activity_log').orderBy('ts', 'desc').limit(500).get();
+        out.activity_log = logSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }
     return out;
 }
 async function dbInsert(companyId, table, payload) {
@@ -17662,16 +17682,52 @@ async function createCompany(name, user) {
         gst_split_enabled: false, sgst_rate: 9, cgst_rate: 9,
         bank_details: {}, upi_id: '', invoice_theme: 'classic', remarks_presets: [],
         counters: { invoice_seq: 1000, quotation_seq: 500 },
+        created_by: user.uid,
         created_at: new Date().toISOString(),
     };
     const ref = await db.collection('companies').add(payload);
-    await ref.collection('members').doc(user.uid).set({ uid: user.uid, email: user.email, role: 'owner', added_at: new Date().toISOString() });
+    await ref.collection('members').doc(user.uid).set({ uid: user.uid, email: user.email, role: 'admin', added_at: new Date().toISOString() });
     const userCompRef = db.collection('user_companies').doc(user.uid);
     const existing = await userCompRef.get();
     const ids = existing.exists ? (existing.data().company_ids || []) : [];
     await userCompRef.set({ company_ids: [...ids, ref.id] });
     await logActivity(ref.id, user.email, 'Company Created', name);
     return { id: ref.id, ...payload };
+}
+async function getMyMembership(companyId, uid) {
+    const snap = await companyRef(companyId).collection('members').doc(uid).get();
+    return snap.exists ? snap.data() : null;
+}
+// ---------- Invites (no server needed — a single-use code in Firestore) ----------
+async function createInvite(companyId, role, technicianId, creatorUid) {
+    const payload = {
+        company_id: companyId, role, technician_id: technicianId || null,
+        created_by: creatorUid, created_at: new Date().toISOString(), used: false, used_by: null,
+    };
+    const ref = await db.collection('invites').add(payload);
+    return { id: ref.id, ...payload };
+}
+async function redeemInvite(inviteCode, user) {
+    const inviteRef = db.collection('invites').doc(inviteCode.trim());
+    const snap = await inviteRef.get();
+    if (!snap.exists)
+        throw new Error("That invite code wasn't found. Double-check it and try again.");
+    const invite = snap.data();
+    if (invite.used)
+        throw new Error("This invite has already been used.");
+    await companyRef(invite.company_id).collection('members').doc(user.uid).set({
+        uid: user.uid, email: user.email, role: invite.role, technician_id: invite.technician_id || null,
+        invite_id: inviteRef.id, added_at: new Date().toISOString(),
+    });
+    await inviteRef.update({ used: true, used_by: user.uid });
+    const userCompRef = db.collection('user_companies').doc(user.uid);
+    const existing = await userCompRef.get();
+    const ids = existing.exists ? (existing.data().company_ids || []) : [];
+    if (!ids.includes(invite.company_id))
+        await userCompRef.set({ company_ids: [...ids, invite.company_id] });
+    const companySnap = await companyRef(invite.company_id).get();
+    await logActivity(invite.company_id, user.email, 'Member Joined', `${user.email} joined as ${invite.role.replace('_', ' ')}`);
+    return { id: invite.company_id, ...companySnap.data() };
 }
 /* ============================================================
    Setup screen — one-time Firebase project connection
@@ -17782,8 +17838,9 @@ function AuthScreen({ onReconfigure, hideReconfigure }) {
    Company picker
    ============================================================ */
 function CompanyGate({ companies, onSelect, onCreated, user }) {
-    const [showCreate, setShowCreate] = useState(companies.length === 0);
+    const [mode, setMode] = useState(companies.length === 0 ? 'create' : 'choose'); // 'create' | 'redeem' | 'choose'
     const [name, setName] = useState('');
+    const [inviteCode, setInviteCode] = useState('');
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const create = async () => {
@@ -17804,7 +17861,25 @@ function CompanyGate({ companies, onSelect, onCreated, user }) {
             setBusy(false);
         }
     };
-    if (showCreate) {
+    const redeem = async () => {
+        if (!inviteCode.trim()) {
+            setError('Enter the invite code your admin shared.');
+            return;
+        }
+        setBusy(true);
+        setError('');
+        try {
+            const company = await redeemInvite(inviteCode.trim(), user);
+            onCreated(company);
+        }
+        catch (err) {
+            setError(err.message || 'Could not redeem that invite.');
+        }
+        finally {
+            setBusy(false);
+        }
+    };
+    if (mode === 'create') {
         return (React.createElement("div", { className: "login-screen" },
             React.createElement("div", { className: "login-card" },
                 React.createElement("h1", null, companies.length === 0 ? 'Set up your company' : 'Add another company'),
@@ -17814,17 +17889,33 @@ function CompanyGate({ companies, onSelect, onCreated, user }) {
                     React.createElement("input", { type: "text", value: name, onChange: e => setName(e.target.value), autoFocus: true, placeholder: "e.g. Anwar Electronics Service" })),
                 error && React.createElement("div", { style: { color: 'var(--red)', fontSize: 13, marginBottom: 12 } }, error),
                 React.createElement("button", { className: "btn btn-primary btn-block", onClick: create, disabled: busy }, busy ? 'Creating…' : 'Create Company'),
-                companies.length > 0 && React.createElement("button", { className: "btn btn-block", style: { marginTop: 10 }, onClick: () => setShowCreate(false) }, "Cancel"))));
+                React.createElement("button", { className: "btn btn-block", style: { marginTop: 10 }, onClick: () => { setMode('redeem'); setError(''); } }, "I have an invite code instead"),
+                companies.length > 0 && React.createElement("button", { className: "btn btn-block", style: { marginTop: 10 }, onClick: () => { setMode('choose'); setError(''); } }, "Cancel"))));
+    }
+    if (mode === 'redeem') {
+        return (React.createElement("div", { className: "login-screen" },
+            React.createElement("div", { className: "login-card" },
+                React.createElement("h1", null, "Join with an invite code"),
+                React.createElement("div", { className: "muted", style: { marginBottom: 20, fontSize: 13.5 } }, "Enter the code your admin shared with you. You'll get exactly the access they set up for you."),
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Invite code"),
+                    React.createElement("input", { type: "text", value: inviteCode, onChange: e => setInviteCode(e.target.value), autoFocus: true, style: { fontFamily: 'IBM Plex Mono,monospace' } })),
+                error && React.createElement("div", { style: { color: 'var(--red)', fontSize: 13, marginBottom: 12 } }, error),
+                React.createElement("button", { className: "btn btn-primary btn-block", onClick: redeem, disabled: busy }, busy ? 'Joining…' : 'Join Company'),
+                React.createElement("button", { className: "btn btn-block", style: { marginTop: 10 }, onClick: () => { setMode(companies.length === 0 ? 'create' : 'choose'); setError(''); } }, "Back"))));
     }
     return (React.createElement("div", { className: "login-screen" },
         React.createElement("div", { className: "login-card" },
             React.createElement("h1", null, "Choose a company"),
             React.createElement("div", { className: "muted", style: { marginBottom: 20, fontSize: 13.5 } }, "Each company's data is kept fully separate."),
             React.createElement("div", { style: { marginBottom: 16 } }, companies.map(c => (React.createElement("button", { key: c.id, className: "btn btn-block", style: { marginBottom: 8, justifyContent: 'flex-start', padding: '12px 14px' }, onClick: () => onSelect(c) }, c.name)))),
-            React.createElement("button", { className: "btn btn-primary btn-block", onClick: () => setShowCreate(true) }, "+ Add Another Company"))));
+            React.createElement("button", { className: "btn btn-primary btn-block", onClick: () => setMode('create') }, "+ Add Another Company"),
+            React.createElement("button", { className: "btn btn-block", style: { marginTop: 10 }, onClick: () => setMode('redeem') }, "I have an invite code"))));
 }
 /* ---------- Dashboard ---------- */
-function Dashboard({ data, company, setRoute }) {
+function Dashboard({ data, company, setRoute, isTech, myTechnicianId }) {
+    if (isTech)
+        return React.createElement(TechDashboard, { data: data, company: company, setRoute: setRoute, myTechnicianId: myTechnicianId });
     const activeInvoices = data.invoices.filter(i => !i.cancelled);
     const totalRevenue = activeInvoices.reduce((s, i) => s + Number(i.total), 0);
     const totalDue = activeInvoices.reduce((s, i) => {
@@ -17905,6 +17996,54 @@ function Dashboard({ data, company, setRoute }) {
                                     React.createElement("td", { className: "num right" }, money(company, s.totalDeposited)),
                                     React.createElement("td", { className: "num right", style: { color: s.totalDue > 0 ? 'var(--red)' : 'var(--green)' } }, money(company, s.totalDue))));
                             }))))))));
+}
+function TechDashboard({ data, company, setRoute, myTechnicianId }) {
+    const s = techStats(data, myTechnicianId);
+    const stock = techStockList(data, myTechnicianId).filter(p => p.issued > 0);
+    const recentInvoices = [...data.invoices].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+    return (React.createElement("div", null,
+        React.createElement("div", { className: "grid grid-4", style: { marginBottom: 24 } },
+            React.createElement("div", { className: "stat" },
+                React.createElement("div", { className: "label" }, "My Total Collection"),
+                React.createElement("div", { className: "value" }, money(company, s.totalCollected))),
+            React.createElement("div", { className: "stat" },
+                React.createElement("div", { className: "label" }, "My Total Deposited"),
+                React.createElement("div", { className: "value teal" }, money(company, s.totalDeposited))),
+            React.createElement("div", { className: "stat" },
+                React.createElement("div", { className: "label" }, "Cash With Me"),
+                React.createElement("div", { className: "value copper" }, money(company, s.cashWithTech))),
+            React.createElement("div", { className: "stat" },
+                React.createElement("div", { className: "label" }, "My Due"),
+                React.createElement("div", { className: "value red" }, money(company, s.totalDue)))),
+        React.createElement("div", { className: "grid grid-2", style: { alignItems: 'start' } },
+            React.createElement("div", { className: "card" },
+                React.createElement("div", { className: "flex-between", style: { marginBottom: 14 } },
+                    React.createElement("h4", { style: { fontSize: 16 } }, "Recent Invoices"),
+                    React.createElement("button", { className: "btn btn-sm", onClick: () => setRoute('invoices') }, "View all")),
+                recentInvoices.length === 0 ? React.createElement("div", { className: "empty" },
+                    React.createElement("h4", null, "No invoices yet")) :
+                    React.createElement("div", { className: "table-wrap" },
+                        React.createElement("table", null,
+                            React.createElement("thead", null,
+                                React.createElement("tr", null,
+                                    React.createElement("th", null, "No."),
+                                    React.createElement("th", null, "Customer"),
+                                    React.createElement("th", { className: "right" }, "Total"))),
+                            React.createElement("tbody", null, recentInvoices.map(i => (React.createElement("tr", { key: i.id },
+                                React.createElement("td", { className: "num" }, i.number),
+                                React.createElement("td", null, i.customer_name),
+                                React.createElement("td", { className: "num right" }, money(company, i.total))))))))),
+            React.createElement("div", { className: "card" },
+                React.createElement("div", { className: "flex-between", style: { marginBottom: 14 } },
+                    React.createElement("h4", { style: { fontSize: 16 } }, "My Parts Stock"),
+                    React.createElement("button", { className: "btn btn-sm", onClick: () => setRoute('stock') }, "View all")),
+                stock.length === 0 ? React.createElement("div", { className: "empty" },
+                    React.createElement("h4", null, "No parts issued to you")) :
+                    React.createElement("div", null, stock.map((p, idx) => (React.createElement("div", { key: idx, className: "flex-between", style: { padding: '6px 0', borderBottom: idx < stock.length - 1 ? '1px solid var(--line-soft)' : 'none' } },
+                        React.createElement("span", { style: { fontSize: 13.5 } }, p.partName),
+                        React.createElement("span", { className: "num", style: { fontWeight: 600 } },
+                            p.current,
+                            " pcs")))))))));
 }
 /* ---------- Line item editor (shared by invoice & quotation) ---------- */
 function LineItems({ items, setItems, catalog, onAddToCatalog }) {
@@ -18500,12 +18639,20 @@ function DocFullPage({ type, doc, company, actions, onClose }) {
                             money(company, doc.total))))))))));
 }
 /* ---------- Technicians ---------- */
-function Technicians({ data, company, actions }) {
+function Technicians({ data, company, actions, isTech, myTechnicianId }) {
     const [showForm, setShowForm] = useState(false);
     const [name, setName] = useState('');
     const [mobile, setMobile] = useState('');
-    const [profileId, setProfileId] = useState(null);
+    const [profileId, setProfileId] = useState(isTech ? myTechnicianId : null);
     const active = data.technicians.filter(t => t.active !== false);
+    if (isTech) {
+        const tech = data.technicians.find(t => t.id === myTechnicianId);
+        if (!tech)
+            return React.createElement("div", { className: "card empty" },
+                React.createElement("h4", null, "Profile not linked"),
+                React.createElement("div", null, "Ask your admin to link your account to a technician record."));
+        return React.createElement(TechProfile, { data: data, company: company, tech: tech, onBack: null });
+    }
     const addTech = async () => {
         if (!name.trim()) {
             alert("Technician name is required.");
@@ -18572,7 +18719,7 @@ function TechProfile({ data, company, tech, onBack }) {
     const s = techStats(data, tech.id);
     const stock = techStockList(data, tech.id).filter(p => p.issued > 0);
     return (React.createElement("div", null,
-        React.createElement("button", { className: "btn btn-sm", onClick: onBack, style: { marginBottom: 16 } }, "\u2190 Back to Technicians"),
+        onBack && React.createElement("button", { className: "btn btn-sm", onClick: onBack, style: { marginBottom: 16 } }, "\u2190 Back to Technicians"),
         React.createElement("h3", { style: { fontSize: 22, marginBottom: 2 } }, tech.name),
         React.createElement("div", { className: "muted", style: { marginBottom: 20 } }, tech.mobile),
         React.createElement("div", { className: "section-title" }, "Collection"),
@@ -19023,27 +19170,28 @@ function OfficeCashForm({ type, onClose, onSave }) {
                 React.createElement("button", { className: "btn " + (isIn ? 'btn-teal' : 'btn-primary'), onClick: save, disabled: saving }, saving ? 'Saving…' : 'Save')))));
 }
 /* ---------- Stock ---------- */
-function Stock({ data, company, actions }) {
+function Stock({ data, company, actions, isTech, isAdminOrSub, myTechnicianId }) {
     const [tab, setTab] = useState('overview');
     const [showIssue, setShowIssue] = useState(false);
     const [showUse, setShowUse] = useState(false);
     const [showReturn, setShowReturn] = useState(false);
     const [showAdjust, setShowAdjust] = useState(false);
     const activeTechs = data.technicians.filter(t => t.active !== false);
-    const tabs = [
-        { id: 'overview', label: 'Technician-wise Stock' },
-        { id: 'main', label: 'Main Stock' },
-        { id: 'issues', label: 'Issue History' },
-        { id: 'usage', label: 'Usage History' },
-        { id: 'returns', label: 'Return History' },
-        { id: 'adjustments', label: 'Stock In/Out History' },
+    const allTabs = [
+        { id: 'overview', label: isTech ? 'My Stock' : 'Technician-wise Stock', show: true },
+        { id: 'main', label: 'Main Stock', show: isAdminOrSub },
+        { id: 'issues', label: 'Issue History', show: isAdminOrSub },
+        { id: 'usage', label: isTech ? 'My Usage History' : 'Usage History', show: true },
+        { id: 'returns', label: isTech ? 'My Return History' : 'Return History', show: true },
+        { id: 'adjustments', label: 'Stock In/Out History', show: isAdminOrSub },
     ];
+    const tabs = allTabs.filter(t => t.show);
     return (React.createElement("div", null,
         React.createElement("div", { className: "flex-between", style: { marginBottom: 16, flexWrap: 'wrap', gap: 12 } },
             React.createElement("div", { className: "pill-filter" }, tabs.map(t => (React.createElement("button", { key: t.id, className: tab === t.id ? 'active' : '', onClick: () => setTab(t.id) }, t.label)))),
             React.createElement("div", { className: "flex gap-8", style: { flexWrap: 'wrap' } },
-                React.createElement("button", { className: "btn btn-teal", onClick: () => setShowAdjust(true) }, "+ Stock In / Out"),
-                React.createElement("button", { className: "btn btn-copper", onClick: () => setShowIssue(true) }, "+ Issue Parts"),
+                isAdminOrSub && React.createElement("button", { className: "btn btn-teal", onClick: () => setShowAdjust(true) }, "+ Stock In / Out"),
+                isAdminOrSub && React.createElement("button", { className: "btn btn-copper", onClick: () => setShowIssue(true) }, "+ Issue Parts"),
                 React.createElement("button", { className: "btn", onClick: () => setShowUse(true) }, "+ Record Usage"),
                 React.createElement("button", { className: "btn", onClick: () => setShowReturn(true) }, "+ Record Return"))),
         tab === 'overview' && (activeTechs.length === 0 ? React.createElement("div", { className: "card empty" },
@@ -19833,6 +19981,7 @@ function Settings({ data, company, actions, companies, user, onSwitchCompany, on
             React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : 'Save Settings')),
         React.createElement(RemarksPresetsSettings, { company: company, actions: actions }),
         React.createElement(CatalogSettings, { data: data, company: company, actions: actions }),
+        React.createElement(TeamSettings, { company: company, data: data, actions: actions, user: user }),
         React.createElement(AccountSettings, { user: user })));
 }
 function AddCompanyInline({ user, actions, onCreated }) {
@@ -19989,6 +20138,147 @@ function AccountSettings({ user }) {
         msg && React.createElement("div", { style: { fontSize: 13, color: msg.includes('updated') ? 'var(--teal)' : 'var(--red)', marginBottom: 10 } }, msg),
         React.createElement("button", { className: "btn btn-primary", onClick: changePassword, disabled: busy }, busy ? 'Saving…' : 'Update Password')));
 }
+function TeamSettings({ company, data, actions, user }) {
+    const [members, setMembers] = useState(null);
+    const [showInvite, setShowInvite] = useState(false);
+    const [generatedCode, setGeneratedCode] = useState(null);
+    const loadMembers = async () => {
+        const snap = await companyRef(company.id).collection('members').get();
+        setMembers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    };
+    useEffect(() => { loadMembers(); }, [company.id]);
+    const roleLabel = (r) => r === 'admin' ? 'Admin' : r === 'sub_admin' ? 'Sub-admin' : 'Technician';
+    const changeRole = async (memberId, newRole) => {
+        await companyRef(company.id).collection('members').doc(memberId).update({ role: newRole });
+        await actions.logAndRecord('Team Member Role Changed', `${memberId} → ${roleLabel(newRole)}`);
+        loadMembers();
+    };
+    const removeMember = async (m) => {
+        if (m.uid === user.uid) {
+            alert("You can't remove yourself.");
+            return;
+        }
+        if (!confirm(`Remove ${m.email} from this company?`))
+            return;
+        await companyRef(company.id).collection('members').doc(m.id).delete();
+        await actions.logAndRecord('Team Member Removed', m.email);
+        loadMembers();
+    };
+    return (React.createElement("div", { className: "card", style: { maxWidth: 680, marginBottom: 20 } },
+        React.createElement("div", { className: "flex-between", style: { marginBottom: 14 } },
+            React.createElement("div", { className: "section-title", style: { marginBottom: 0 } }, "Team & Access"),
+            React.createElement("button", { className: "btn btn-sm btn-primary", onClick: () => { setShowInvite(true); setGeneratedCode(null); } }, "+ Invite Teammate")),
+        React.createElement("div", { className: "muted", style: { fontSize: 13, marginBottom: 14 } },
+            React.createElement("b", null, "Admin"),
+            " \u2014 full access, including this Settings page and team management.",
+            React.createElement("br", null),
+            React.createElement("b", null, "Sub-admin"),
+            " \u2014 everything except Settings and team management.",
+            React.createElement("br", null),
+            React.createElement("b", null, "Technician"),
+            " \u2014 only their own collection, deposits and stock; can create invoices/quotations."),
+        members === null ? React.createElement("div", { className: "muted" }, "Loading\u2026") : (React.createElement("div", { className: "table-wrap" },
+            React.createElement("table", null,
+                React.createElement("thead", null,
+                    React.createElement("tr", null,
+                        React.createElement("th", null, "Email"),
+                        React.createElement("th", null, "Role"),
+                        React.createElement("th", null, "Linked technician"),
+                        React.createElement("th", null))),
+                React.createElement("tbody", null, members.map(m => {
+                    const tech = m.technician_id ? data.technicians.find(t => t.id === m.technician_id) : null;
+                    return (React.createElement("tr", { key: m.id },
+                        React.createElement("td", null,
+                            m.email,
+                            m.uid === user.uid && React.createElement("span", { className: "badge badge-teal", style: { marginLeft: 6 } }, "You")),
+                        React.createElement("td", null,
+                            React.createElement("select", { value: m.role, onChange: e => changeRole(m.id, e.target.value), disabled: m.uid === user.uid, style: { width: 130 } },
+                                React.createElement("option", { value: "admin" }, "Admin"),
+                                React.createElement("option", { value: "sub_admin" }, "Sub-admin"),
+                                React.createElement("option", { value: "technician" }, "Technician"))),
+                        React.createElement("td", null, tech ? tech.name : (m.role === 'technician' ? '—' : '')),
+                        React.createElement("td", null, m.uid !== user.uid && React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => removeMember(m) }, "Remove"))));
+                }))))),
+        showInvite && (React.createElement(InviteForm, { company: company, data: data, user: user, actions: actions, onGenerated: (code) => setGeneratedCode(code), onClose: () => { setShowInvite(false); loadMembers(); }, generatedCode: generatedCode }))));
+}
+function InviteForm({ company, data, user, actions, onGenerated, onClose, generatedCode }) {
+    var _a;
+    const [role, setRole] = useState('sub_admin');
+    const [techMode, setTechMode] = useState('existing');
+    const [technicianId, setTechnicianId] = useState(((_a = data.technicians[0]) === null || _a === void 0 ? void 0 : _a.id) || '');
+    const [newTechName, setNewTechName] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [copied, setCopied] = useState(false);
+    const generate = async () => {
+        setBusy(true);
+        try {
+            let techId = null;
+            if (role === 'technician') {
+                if (techMode === 'new') {
+                    if (!newTechName.trim()) {
+                        alert("Enter a technician name.");
+                        setBusy(false);
+                        return;
+                    }
+                    const row = await actions.create('technicians', { name: newTechName.trim(), mobile: '', active: true }, 'Technician Added', newTechName.trim());
+                    techId = row.id;
+                }
+                else {
+                    if (!technicianId) {
+                        alert("Select a technician, or choose 'New technician'.");
+                        setBusy(false);
+                        return;
+                    }
+                    techId = technicianId;
+                }
+            }
+            const invite = await createInvite(company.id, role, techId, user.uid);
+            await actions.logAndRecord('Invite Generated', `${role.replace('_', ' ')} invite created`);
+            onGenerated(invite.id);
+        }
+        catch (err) {
+            alert(err.message);
+        }
+        finally {
+            setBusy(false);
+        }
+    };
+    const copyCode = () => {
+        var _a;
+        (_a = navigator.clipboard) === null || _a === void 0 ? void 0 : _a.writeText(generatedCode);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+    return (React.createElement("div", { className: "modal-overlay", onClick: e => { if (e.target === e.currentTarget)
+            onClose(); } },
+        React.createElement("div", { className: "modal" },
+            React.createElement("div", { className: "modal-head" },
+                React.createElement("h3", null, "Invite a Teammate"),
+                React.createElement("button", { className: "modal-close", onClick: onClose }, "\u2715")),
+            generatedCode ? (React.createElement("div", null,
+                React.createElement("div", { className: "muted", style: { fontSize: 13.5, marginBottom: 14 } }, "Share this code with your teammate. They sign up (or sign in) on this same app, choose \"I have an invite code\", and enter it \u2014 they'll join instantly with the access you chose. The code works once."),
+                React.createElement("div", { style: { background: 'var(--paper-alt)', border: '1px solid var(--line)', borderRadius: 8, padding: '14px 16px', fontFamily: 'IBM Plex Mono,monospace', fontSize: 14, wordBreak: 'break-all', marginBottom: 14 } }, generatedCode),
+                React.createElement("div", { className: "flex gap-10", style: { justifyContent: 'flex-end' } },
+                    React.createElement("button", { className: "btn", onClick: copyCode }, copied ? 'Copied!' : 'Copy Code'),
+                    React.createElement("button", { className: "btn btn-primary", onClick: onClose }, "Done")))) : (React.createElement("div", null,
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Role"),
+                    React.createElement("select", { value: role, onChange: e => setRole(e.target.value) },
+                        React.createElement("option", { value: "sub_admin" }, "Sub-admin \u2014 everything except Settings"),
+                        React.createElement("option", { value: "technician" }, "Technician \u2014 only their own collection/stock"))),
+                role === 'technician' && (React.createElement(React.Fragment, null,
+                    React.createElement("div", { className: "pill-filter", style: { marginBottom: 12 } },
+                        React.createElement("button", { className: techMode === 'existing' ? 'active' : '', onClick: () => setTechMode('existing') }, "Link to existing technician"),
+                        React.createElement("button", { className: techMode === 'new' ? 'active' : '', onClick: () => setTechMode('new') }, "New technician")),
+                    techMode === 'existing' ? (React.createElement("div", { className: "field" },
+                        React.createElement("label", null, "Technician"),
+                        React.createElement("select", { value: technicianId, onChange: e => setTechnicianId(e.target.value) }, data.technicians.filter(t => t.active !== false).map(t => React.createElement("option", { key: t.id, value: t.id }, t.name))))) : (React.createElement("div", { className: "field" },
+                        React.createElement("label", null, "Technician name"),
+                        React.createElement("input", { type: "text", value: newTechName, onChange: e => setNewTechName(e.target.value), autoFocus: true }))))),
+                React.createElement("div", { className: "flex gap-10", style: { justifyContent: 'flex-end' } },
+                    React.createElement("button", { className: "btn", onClick: onClose }, "Cancel"),
+                    React.createElement("button", { className: "btn btn-primary", onClick: generate, disabled: busy }, busy ? 'Generating…' : 'Generate Invite Code')))))));
+}
 /* ============================================================
    Root App
    ============================================================ */
@@ -19999,6 +20289,7 @@ function App() {
     const [user, setUser] = useState(null);
     const [companies, setCompanies] = useState(null);
     const [company, setCompany] = useState(null);
+    const [membership, setMembership] = useState(null); // {role, technician_id}
     const [data, setData] = useState(null);
     const [dataError, setDataError] = useState('');
     const [route, setRoute] = useState('dashboard');
@@ -20047,13 +20338,15 @@ function App() {
             return;
         setDataError('');
         try {
-            setData(await loadCompanyData(company.id));
+            const mem = await getMyMembership(company.id, user.uid);
+            setMembership(mem);
+            setData(await loadCompanyData(company.id, mem === null || mem === void 0 ? void 0 : mem.role, mem === null || mem === void 0 ? void 0 : mem.technician_id));
         }
         catch (err) {
             setDataError(err.message || 'Could not load data.');
         }
     };
-    useEffect(() => { setData(null); reloadData(); }, [company && company.id]);
+    useEffect(() => { setData(null); setMembership(null); reloadData(); }, [company && company.id]);
     const logAndRecord = async (action, details) => {
         const row = await logActivity(company.id, user.email, action, details || '');
         if (row)
@@ -20164,35 +20457,45 @@ function App() {
         }
         return React.createElement(DocFullPage, { type: viewingDoc.type, doc: liveDoc, company: company, actions: actions, onClose: closeDoc });
     }
-    const nav = [
-        { id: 'dashboard', label: 'Dashboard', icon: '◆' },
-        { id: 'invoices', label: 'Invoices', icon: '▤' },
-        { id: 'quotations', label: 'Quotations', icon: '▥' },
-        { id: 'technicians', label: 'Technicians', icon: '☺' },
-        { id: 'collection', label: 'Technician Collection', icon: '⌗' },
-        { id: 'deposit', label: 'Technician Deposit', icon: '⇩' },
-        { id: 'officecash', label: 'Office Cash', icon: '₹' },
-        { id: 'stock', label: 'Technician Parts Stock', icon: '⚙' },
-        { id: 'reports', label: 'Reports', icon: '▦' },
-        { id: 'activity', label: 'Activity', icon: '⏱' },
-        { id: 'settings', label: 'Settings', icon: '⚿' },
+    const role = (membership === null || membership === void 0 ? void 0 : membership.role) || 'admin';
+    const myTechnicianId = (membership === null || membership === void 0 ? void 0 : membership.technician_id) || null;
+    const isAdmin = role === 'admin';
+    const isAdminOrSub = role === 'admin' || role === 'sub_admin';
+    const isTech = role === 'technician';
+    const allNav = [
+        { id: 'dashboard', label: 'Dashboard', icon: '◆', show: true },
+        { id: 'invoices', label: 'Invoices', icon: '▤', show: true },
+        { id: 'quotations', label: 'Quotations', icon: '▥', show: true },
+        { id: 'technicians', label: isTech ? 'My Profile' : 'Technicians', icon: '☺', show: true },
+        { id: 'collection', label: isTech ? 'My Collection' : 'Technician Collection', icon: '⌗', show: true },
+        { id: 'deposit', label: isTech ? 'My Deposits' : 'Technician Deposit', icon: '⇩', show: true },
+        { id: 'officecash', label: 'Office Cash', icon: '₹', show: isAdminOrSub },
+        { id: 'stock', label: isTech ? 'My Parts Stock' : 'Technician Parts Stock', icon: '⚙', show: true },
+        { id: 'reports', label: 'Reports', icon: '▦', show: isAdminOrSub },
+        { id: 'activity', label: 'Activity', icon: '⏱', show: isAdminOrSub },
+        { id: 'settings', label: 'Settings', icon: '⚿', show: isAdminOrSub },
     ];
+    const nav = allNav.filter(n => n.show);
+    // If a technician's route became inaccessible (e.g. role changed), bounce to dashboard.
+    if (!nav.some(n => n.id === route) && route !== 'dashboard') {
+        setRoute('dashboard');
+    }
     const titles = {
         dashboard: ['Dashboard', 'Overview of billing, collection and stock'],
         invoices: ['Invoices', 'Create and track tax invoices'],
         quotations: ['Quotations', 'Draft and send price quotations'],
-        technicians: ['Technicians', 'Team roster and individual summaries'],
-        collection: ['Technician Collection', 'Cash and online collection by technician'],
-        deposit: ['Technician Deposit', 'Record deposits made against collected cash'],
+        technicians: [isTech ? 'My Profile' : 'Technicians', isTech ? 'Your collection and stock summary' : 'Team roster and individual summaries'],
+        collection: [isTech ? 'My Collection' : 'Technician Collection', isTech ? 'Cash and online amounts you have collected' : 'Cash and online collection by technician'],
+        deposit: [isTech ? 'My Deposits' : 'Technician Deposit', isTech ? 'Deposits you have made against your collection' : 'Record deposits made against collected cash'],
         officecash: ['Office Cash', 'Cash in hand — deposits in, expenses out'],
-        stock: ['Technician Parts Stock', 'Issue, use and return spare parts'],
+        stock: [isTech ? 'My Parts Stock' : 'Technician Parts Stock', isTech ? 'Parts issued to you, used and returned' : 'Issue, use and return spare parts'],
         reports: ['Reports', 'Filtered exports across every register'],
         activity: ['Activity', 'Every login, addition and deletion, logged'],
-        settings: ['Settings', 'Company details, themes, GST and more'],
+        settings: ['Settings', 'Company details, themes, GST, team and more'],
     };
     const go = (r) => { setRoute(r); setSidebarOpen(false); };
     let body = null;
-    const common = { data, company, actions, openDoc };
+    const common = { data, company, actions, openDoc, role, myTechnicianId, isAdmin, isAdminOrSub, isTech };
     if (route === 'dashboard')
         body = React.createElement(Dashboard, { ...common, setRoute: go });
     else if (route === 'invoices')
@@ -20205,15 +20508,15 @@ function App() {
         body = React.createElement(Collection, { ...common });
     else if (route === 'deposit')
         body = React.createElement(Deposit, { ...common });
-    else if (route === 'officecash')
+    else if (route === 'officecash' && isAdminOrSub)
         body = React.createElement(OfficeCash, { ...common });
     else if (route === 'stock')
         body = React.createElement(Stock, { ...common });
-    else if (route === 'reports')
+    else if (route === 'reports' && isAdminOrSub)
         body = React.createElement(Reports, { ...common });
-    else if (route === 'activity')
+    else if (route === 'activity' && isAdminOrSub)
         body = React.createElement(Activity, { ...common });
-    else if (route === 'settings')
+    else if (route === 'settings' && isAdminOrSub)
         body = React.createElement(Settings, { key: company.id, ...common, companies: companies, user: user, onSwitchCompany: setCompany, onCompaniesChanged: setCompanies });
     return (React.createElement("div", { className: "app-shell" },
         sidebarOpen && React.createElement("div", { className: "sidebar-scrim", onClick: () => setSidebarOpen(false) }),
