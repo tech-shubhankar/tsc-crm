@@ -17595,7 +17595,7 @@ const ADMIN_ONLY_TABLES = ['office_cash', 'main_stock', 'main_stock_adjustments'
 const TECH_SCOPED_TABLES = ['collections', 'deposits', 'stock_usage', 'stock_returns'];
 async function loadCompanyData(companyId, myRole, myTechnicianId) {
     const isTech = myRole === 'technician';
-    const tablesToLoad = isTech ? TABLES.filter(t => !ADMIN_ONLY_TABLES.includes(t)) : TABLES;
+    const tablesToLoad = isTech ? TABLES.filter(t => !ADMIN_ONLY_TABLES.includes(t) && t !== 'technicians') : TABLES;
     const results = await Promise.all(tablesToLoad.map(t => {
         let ref = tableRef(companyId, t);
         if (isTech && TECH_SCOPED_TABLES.includes(t))
@@ -17674,8 +17674,24 @@ async function loadUserCompanies(uid) {
     const ids = snap.exists ? (snap.data().company_ids || []) : [];
     if (ids.length === 0)
         return [];
-    const companies = await Promise.all(ids.map(id => companyRef(id).get()));
-    return companies.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() }));
+    const results = await Promise.allSettled(ids.map(id => companyRef(id).get()));
+    const accessible = [];
+    const staleIds = [];
+    results.forEach((r, i) => {
+        if (r.status === 'fulfilled' && r.value.exists)
+            accessible.push({ id: r.value.id, ...r.value.data() });
+        else
+            staleIds.push(ids[i]); // company deleted, or we were removed from it
+    });
+    // Self-heal: drop companies we can no longer access from our own list
+    // (we can only ever write our own user_companies doc, never someone else's).
+    if (staleIds.length > 0) {
+        try {
+            await db.collection('user_companies').doc(uid).set({ company_ids: ids.filter(id => !staleIds.includes(id)) });
+        }
+        catch (e) { /* non-fatal — worst case we re-check next load */ }
+    }
+    return accessible;
 }
 async function createCompany(name, user) {
     const payload = {
@@ -18118,23 +18134,38 @@ function addToCatalog(actions, name, rate) {
 function Invoices({ data, company, actions, openDoc }) {
     const [showForm, setShowForm] = useState(false);
     const [filter, setFilter] = useState('All');
+    const [search, setSearch] = useState('');
     const filtered = data.invoices.filter(i => {
-        if (filter === 'All')
-            return true;
-        return invoiceStatus(i) === filter;
+        if (filter !== 'All' && invoiceStatus(i) !== filter)
+            return false;
+        if (search.trim()) {
+            const q = search.trim().toLowerCase();
+            const hay = [i.number, i.customer_name, i.customer_mobile, i.customer_address, i.imei, i.service_order_no]
+                .filter(Boolean).join(' ').toLowerCase();
+            if (!hay.includes(q))
+                return false;
+        }
+        return true;
     }).sort((a, b) => b.date.localeCompare(a.date));
     const doCancel = (inv) => {
         if (!confirm("Cancel this invoice? It stays in history marked CANCELLED."))
             return;
         actions.update('invoices', inv.id, { cancelled: true }, 'Invoice Cancelled', inv.number);
     };
+    const markFullyPaid = (inv) => {
+        if (!confirm(`Mark ${inv.number} as fully paid? This settles the remaining due amount.`))
+            return;
+        actions.update('invoices', inv.id, { advance_paid: inv.total }, 'Invoice Settled — Full Payment', `${inv.number} — balance cleared`);
+    };
     return (React.createElement("div", null,
         React.createElement("div", { className: "flex-between", style: { marginBottom: 16, flexWrap: 'wrap', gap: 10 } },
             React.createElement("div", { className: "pill-filter" }, ['All', 'Fully Paid', 'Advance / Partial', 'Due', 'Cancelled'].map(f => (React.createElement("button", { key: f, className: filter === f ? 'active' : '', onClick: () => setFilter(f) }, f)))),
             React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ New Invoice")),
+        React.createElement("div", { className: "field", style: { maxWidth: 360 } },
+            React.createElement("input", { type: "text", value: search, onChange: e => setSearch(e.target.value), placeholder: "Search name, mobile, invoice no., IMEI\u2026" })),
         filtered.length === 0 ? (React.createElement("div", { className: "card empty" },
             React.createElement("h4", null, "No invoices found"),
-            React.createElement("div", null, "Try a different filter, or create a new invoice."))) : (React.createElement("div", { className: "table-wrap" },
+            React.createElement("div", null, "Try a different filter or search, or create a new invoice."))) : (React.createElement("div", { className: "table-wrap" },
             React.createElement("table", null,
                 React.createElement("thead", null,
                     React.createElement("tr", null,
@@ -18148,6 +18179,7 @@ function Invoices({ data, company, actions, openDoc }) {
                 React.createElement("tbody", null, filtered.map(inv => {
                     const paid = inv.payment_type === 'Full' ? inv.total : Number(inv.advance_paid || 0);
                     const due = Math.max(inv.total - paid, 0);
+                    const status = invoiceStatus(inv);
                     return (React.createElement("tr", { key: inv.id, className: inv.cancelled ? 'cancelled' : '' },
                         React.createElement("td", { className: "num" }, inv.number),
                         React.createElement("td", null, dLabel(inv.date)),
@@ -18156,10 +18188,11 @@ function Invoices({ data, company, actions, openDoc }) {
                             React.createElement("div", { className: "muted", style: { fontSize: 12 } }, inv.customer_mobile)),
                         React.createElement("td", { className: "num right" }, money(company, inv.total)),
                         React.createElement("td", { className: "num right" }, money(company, due)),
-                        React.createElement("td", null, statusBadge(invoiceStatus(inv))),
+                        React.createElement("td", null, statusBadge(status)),
                         React.createElement("td", null,
                             React.createElement("div", { className: "flex gap-8" },
                                 React.createElement("button", { className: "btn btn-sm", onClick: () => openDoc('invoice', inv) }, "View"),
+                                !inv.cancelled && due > 0 && React.createElement("button", { className: "btn btn-sm btn-teal", onClick: () => markFullyPaid(inv) }, "Mark Full Payment"),
                                 !inv.cancelled && React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => doCancel(inv) }, "Cancel")))));
                 }))))),
         showForm && React.createElement(InvoiceForm, { data: data, company: company, actions: actions, openDoc: openDoc, onClose: () => setShowForm(false) })));
@@ -18559,6 +18592,19 @@ function DocFullPage({ type, doc, company, actions, onClose }) {
     const bank = company.bank_details || {};
     const qrUrl = upiQrUrl(company, doc.total);
     const hasPayment = isInvoice && (bank.account_no || bank.ifsc || bank.bank_name || company.upi_id);
+    const [settling, setSettling] = useState(false);
+    const markFullyPaid = async () => {
+        if (!confirm(`Mark ${doc.number} as fully paid? This settles the remaining due amount.`))
+            return;
+        setSettling(true);
+        try {
+            await actions.update('invoices', doc.id, { advance_paid: doc.total }, 'Invoice Settled — Full Payment', `${doc.number} — balance cleared`);
+            actions.notify("Marked as fully paid");
+        }
+        finally {
+            setSettling(false);
+        }
+    };
     const wordExport = () => {
         const el = document.getElementById('doc-sheet-content');
         if (!el)
@@ -18620,6 +18666,7 @@ function DocFullPage({ type, doc, company, actions, onClose }) {
             React.createElement("button", { className: "btn", onClick: onClose }, "\u2190 Back"),
             React.createElement("div", { className: "flex gap-8", style: { flexWrap: 'wrap' } },
                 React.createElement("button", { className: "btn", onClick: () => setChangingTheme(v => !v) }, "\uD83C\uDFA8 Change Theme"),
+                isInvoice && due > 0 && !doc.cancelled && React.createElement("button", { className: "btn btn-teal", onClick: markFullyPaid, disabled: settling }, settling ? 'Saving…' : '✓ Mark Full Payment'),
                 React.createElement("button", { className: "btn", style: { background: '#25D366', borderColor: '#25D366', color: '#fff' }, onClick: shareOnWhatsApp, disabled: waBusy }, waBusy ? 'Preparing…' : '💬 Share on WhatsApp'),
                 React.createElement("button", { className: "btn", onClick: () => window.print() }, "\uD83D\uDDA8 Print"),
                 React.createElement("button", { className: "btn", onClick: downloadPdf, disabled: pdfBusy }, pdfBusy ? 'Generating…' : '⬇ Download PDF'),
@@ -20584,7 +20631,7 @@ function App() {
         { id: 'stock', label: isTech ? 'My Parts Stock' : 'Technician Parts Stock', icon: '⚙', show: true },
         { id: 'reports', label: 'Reports', icon: '▦', show: isAdminOrSub },
         { id: 'activity', label: 'Activity', icon: '⏱', show: isAdminOrSub },
-        { id: 'settings', label: 'Settings', icon: '⚿', show: isAdminOrSub },
+        { id: 'settings', label: 'Settings', icon: '⚿', show: isAdmin },
     ];
     const nav = allNav.filter(n => n.show);
     // If a technician's route became inaccessible (e.g. role changed), bounce to dashboard.
@@ -20627,7 +20674,7 @@ function App() {
         body = React.createElement(Reports, { ...common });
     else if (route === 'activity' && isAdminOrSub)
         body = React.createElement(Activity, { ...common });
-    else if (route === 'settings' && isAdminOrSub)
+    else if (route === 'settings' && isAdmin)
         body = React.createElement(Settings, { key: company.id, ...common, companies: companies, user: user, onSwitchCompany: setCompany, onCompaniesChanged: setCompanies });
     return (React.createElement("div", { className: "app-shell" },
         sidebarOpen && React.createElement("div", { className: "sidebar-scrim", onClick: () => setSidebarOpen(false) }),
