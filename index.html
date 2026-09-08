@@ -36,11 +36,11 @@
   a{ color:inherit; }
   img{ max-width:100%; }
 
-  #root{ min-height:100vh; }
-  .app-shell{ display:flex; min-height:100vh; }
+  #root{ min-height:100vh; min-height:100dvh; }
+  .app-shell{ display:flex; min-height:100vh; min-height:100dvh; }
   .sidebar{
     width:var(--sidebar-w); flex-shrink:0; background:var(--ink); color:#E9E4D8;
-    display:flex; flex-direction:column; position:sticky; top:0; height:100vh; z-index:30;
+    display:flex; flex-direction:column; position:sticky; top:0; height:100vh; height:100dvh; z-index:30;
   }
   .sidebar-brand{ padding:22px 20px 16px; border-bottom:1px solid rgba(255,255,255,0.09); }
   .sidebar-brand h1{ color:#fff; font-size:19px; }
@@ -131,7 +131,7 @@
   @media(max-width:900px){ .line-item-row{ grid-template-columns:1fr 1fr; } }
 
   /* ---------- Login / Setup screens ---------- */
-  .login-screen{ min-height:100vh; display:flex; align-items:center; justify-content:center; background:radial-gradient(circle at 30% 20%, #263145, #131A24); padding:20px; }
+  .login-screen{ min-height:100vh; min-height:100dvh; display:flex; align-items:center; justify-content:center; background:radial-gradient(circle at 30% 20%, #263145, #131A24); padding:20px; }
   .login-card{ background:var(--paper-card); border-radius:12px; padding:34px 32px; width:100%; max-width:380px; }
   .login-card h1{ font-size:26px; margin-bottom:4px; }
   .login-hint{ font-size:12px; color:var(--text-mute); margin-top:14px; text-align:center; }
@@ -150,7 +150,7 @@
     .content{ padding:18px 16px 90px; }
     .modal{ padding:20px 18px 22px; }
     .modal-overlay{ padding:0; align-items:flex-start; }
-    .modal{ border-radius:0; max-width:100%; min-height:100vh; }
+    .modal{ border-radius:0; max-width:100%; min-height:100vh; min-height:100dvh; }
     .line-item-row{ grid-template-columns:1fr 1fr; }
     .doc-meta-grid{ grid-template-columns:1fr !important; }
   }
@@ -160,7 +160,7 @@
   ::-webkit-scrollbar-thumb{ background:#D3C9B3; border-radius:10px; }
 
   /* ================= Full-page invoice/quotation view ================= */
-  .doc-page-shell{ min-height:100vh; background:#EEE9DF; }
+  .doc-page-shell{ min-height:100vh; min-height:100dvh; background:#EEE9DF; }
   .doc-page-bar{ position:sticky; top:0; z-index:20; background:var(--ink); color:#fff; padding:12px 24px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
   .doc-page-bar .btn{ background:rgba(255,255,255,0.1); border-color:rgba(255,255,255,0.2); color:#fff; }
   .doc-page-bar .btn-primary{ background:var(--teal); border-color:var(--teal); }
@@ -217,10 +217,13 @@
 
   /* ---------- Print ---------- */
   @media print{
+    @page{ margin:12mm; }
+    html, body{ height:auto !important; min-height:0 !important; }
     .sidebar, .topbar, .doc-page-bar, .hamburger, .no-print{ display:none !important; }
-    .doc-page-shell{ background:#fff; min-height:0; }
-    .doc-page-wrap{ max-width:100%; margin:0; padding:0; }
-    .doc-sheet{ box-shadow:none; padding:14mm; }
+    .doc-page-shell{ background:#fff; min-height:0 !important; height:auto !important; }
+    .doc-page-wrap{ max-width:100%; margin:0 !important; padding:0 !important; }
+    .doc-sheet{ box-shadow:none !important; padding:0 !important; margin:0 !important; }
+    .theme-modern .doc-head, .theme-colorful .doc-head{ margin:0 0 24px 0 !important; }
     body{ background:#fff; }
   }
 </style>
@@ -17693,6 +17696,28 @@ async function loadUserCompanies(uid) {
     }
     return accessible;
 }
+// Restore a backup export by re-creating all its records as new documents
+// in the given company (chunked batched writes; never overwrites first —
+// caller is responsible for warning the user this ADDS records).
+async function restoreBackupData(companyId, backupData) {
+    const CHUNK = 400;
+    let count = 0;
+    for (const table of TABLES) {
+        const records = (backupData[table] || []).filter(r => r && typeof r === 'object');
+        for (let i = 0; i < records.length; i += CHUNK) {
+            const chunk = records.slice(i, i + CHUNK);
+            const batch = db.batch();
+            chunk.forEach(rec => {
+                const { id, ...rest } = rec;
+                const ref = tableRef(companyId, table).doc();
+                batch.set(ref, rest);
+            });
+            await batch.commit();
+            count += chunk.length;
+        }
+    }
+    return count;
+}
 async function createCompany(name, user) {
     const payload = {
         name, address: '', phone: '', gst: '', currency: '₹',
@@ -18133,6 +18158,7 @@ function addToCatalog(actions, name, rate) {
 /* ---------- Invoices ---------- */
 function Invoices({ data, company, actions, openDoc }) {
     const [showForm, setShowForm] = useState(false);
+    const [editing, setEditing] = useState(null);
     const [filter, setFilter] = useState('All');
     const [search, setSearch] = useState('');
     const filtered = data.invoices.filter(i => {
@@ -18160,7 +18186,7 @@ function Invoices({ data, company, actions, openDoc }) {
     return (React.createElement("div", null,
         React.createElement("div", { className: "flex-between", style: { marginBottom: 16, flexWrap: 'wrap', gap: 10 } },
             React.createElement("div", { className: "pill-filter" }, ['All', 'Fully Paid', 'Advance / Partial', 'Due', 'Cancelled'].map(f => (React.createElement("button", { key: f, className: filter === f ? 'active' : '', onClick: () => setFilter(f) }, f)))),
-            React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ New Invoice")),
+            React.createElement("button", { className: "btn btn-primary", onClick: () => { setEditing(null); setShowForm(true); } }, "+ New Invoice")),
         React.createElement("div", { className: "field", style: { maxWidth: 360 } },
             React.createElement("input", { type: "text", value: search, onChange: e => setSearch(e.target.value), placeholder: "Search name, mobile, invoice no., IMEI\u2026" })),
         filtered.length === 0 ? (React.createElement("div", { className: "card empty" },
@@ -18192,28 +18218,30 @@ function Invoices({ data, company, actions, openDoc }) {
                         React.createElement("td", null,
                             React.createElement("div", { className: "flex gap-8" },
                                 React.createElement("button", { className: "btn btn-sm", onClick: () => openDoc('invoice', inv) }, "View"),
+                                !inv.cancelled && React.createElement("button", { className: "btn btn-sm", onClick: () => { setEditing(inv); setShowForm(true); } }, "Edit"),
                                 !inv.cancelled && due > 0 && React.createElement("button", { className: "btn btn-sm btn-teal", onClick: () => markFullyPaid(inv) }, "Mark Full Payment"),
                                 !inv.cancelled && React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => doCancel(inv) }, "Cancel")))));
                 }))))),
-        showForm && React.createElement(InvoiceForm, { data: data, company: company, actions: actions, openDoc: openDoc, onClose: () => setShowForm(false) })));
+        showForm && React.createElement(InvoiceForm, { data: data, company: company, actions: actions, openDoc: openDoc, editing: editing, onClose: () => { setShowForm(false); setEditing(null); } })));
 }
-function InvoiceForm({ data, company, actions, openDoc, onClose }) {
-    const [customerName, setCustomerName] = useState('');
-    const [customerMobile, setCustomerMobile] = useState('');
-    const [customerAddress, setCustomerAddress] = useState('');
-    const [date, setDate] = useState(todayISO());
-    const [serviceOrderNo, setServiceOrderNo] = useState('');
-    const [imei, setImei] = useState('');
-    const [items, setItems] = useState([{ id: uid('li'), name: '', qty: 1, rate: 0 }]);
-    const [discount, setDiscount] = useState(0);
-    const [tax, setTax] = useState(0);
-    const [gstSplit, setGstSplit] = useState(!!company.gst_split_enabled);
+function InvoiceForm({ data, company, actions, openDoc, editing, onClose }) {
+    var _a;
+    const [customerName, setCustomerName] = useState((editing === null || editing === void 0 ? void 0 : editing.customer_name) || '');
+    const [customerMobile, setCustomerMobile] = useState((editing === null || editing === void 0 ? void 0 : editing.customer_mobile) || '');
+    const [customerAddress, setCustomerAddress] = useState((editing === null || editing === void 0 ? void 0 : editing.customer_address) || '');
+    const [date, setDate] = useState((editing === null || editing === void 0 ? void 0 : editing.date) || todayISO());
+    const [serviceOrderNo, setServiceOrderNo] = useState((editing === null || editing === void 0 ? void 0 : editing.service_order_no) || '');
+    const [imei, setImei] = useState((editing === null || editing === void 0 ? void 0 : editing.imei) || '');
+    const [items, setItems] = useState(((_a = editing === null || editing === void 0 ? void 0 : editing.items) === null || _a === void 0 ? void 0 : _a.map(i => ({ ...i }))) || [{ id: uid('li'), name: '', qty: 1, rate: 0 }]);
+    const [discount, setDiscount] = useState((editing === null || editing === void 0 ? void 0 : editing.discount) || 0);
+    const [tax, setTax] = useState((editing === null || editing === void 0 ? void 0 : editing.tax) || 0);
+    const [gstSplit, setGstSplit] = useState(editing ? !!editing.gst_split : !!company.gst_split_enabled);
     const [sgstRate, setSgstRate] = useState(company.sgst_rate || 9);
     const [cgstRate, setCgstRate] = useState(company.cgst_rate || 9);
-    const [paymentType, setPaymentType] = useState('Full');
-    const [advancePaid, setAdvancePaid] = useState(0);
-    const [remarks, setRemarks] = useState('');
-    const [theme, setTheme] = useState(company.invoice_theme || 'classic');
+    const [paymentType, setPaymentType] = useState((editing === null || editing === void 0 ? void 0 : editing.payment_type) || 'Full');
+    const [advancePaid, setAdvancePaid] = useState((editing === null || editing === void 0 ? void 0 : editing.advance_paid) || 0);
+    const [remarks, setRemarks] = useState((editing === null || editing === void 0 ? void 0 : editing.remarks) || '');
+    const [theme, setTheme] = useState((editing === null || editing === void 0 ? void 0 : editing.theme) || company.invoice_theme || 'classic');
     const [saving, setSaving] = useState(false);
     const totals = computeTotals(items, discount, tax, gstSplit, sgstRate, cgstRate);
     const due = paymentType === 'Full' ? 0 : Math.max(totals.total - Number(advancePaid || 0), 0);
@@ -18229,21 +18257,29 @@ function InvoiceForm({ data, company, actions, openDoc, onClose }) {
         }
         setSaving(true);
         try {
-            const seq = await nextInvoiceNumber(company.id);
-            const num = (company.invoice_prefix || 'INV') + '-' + seq;
-            const row = await actions.create('invoices', {
-                number: num, date, customer_name: customerName, customer_mobile: customerMobile, customer_address: customerAddress,
+            const payload = {
+                date, customer_name: customerName, customer_mobile: customerMobile, customer_address: customerAddress,
                 items: cleanItems, discount: Number(discount), tax: Number(tax),
                 gst_split: gstSplit, sgst_amt: totals.sgstAmt, cgst_amt: totals.cgstAmt,
                 sub: totals.sub, disc_amt: totals.discAmt, tax_amt: totals.taxAmt, total: totals.total,
                 payment_type: paymentType, advance_paid: paymentType === 'Advance' ? Number(advancePaid || 0) : totals.total,
-                cancelled: false, service_order_no: serviceOrderNo, imei, remarks, theme,
-            }, 'Invoice Created', (r) => `${num} — ${customerName} — ${money(company, totals.total)}`);
-            actions.notify("Invoice saved");
+                service_order_no: serviceOrderNo, imei, remarks, theme,
+            };
+            let row;
+            if (editing) {
+                row = await actions.updateDocWithHistory('invoices', editing.id, payload, 'Invoice Edited', `${editing.number} — ${customerName} — ${money(company, totals.total)}`);
+                row = { ...editing, ...payload, id: editing.id };
+            }
+            else {
+                const seq = await nextInvoiceNumber(company.id);
+                const num = (company.invoice_prefix || 'INV') + '-' + seq;
+                row = await actions.create('invoices', { ...payload, number: num, cancelled: false }, 'Invoice Created', (r) => `${num} — ${customerName} — ${money(company, totals.total)}`);
+            }
+            actions.notify(editing ? "Invoice updated" : "Invoice saved");
             onClose();
             openDoc('invoice', row);
         }
-        catch (err) { /* alert already shown by actions.create */ }
+        catch (err) { /* alert already shown by actions */ }
         finally {
             setSaving(false);
         }
@@ -18253,8 +18289,8 @@ function InvoiceForm({ data, company, actions, openDoc, onClose }) {
         React.createElement("div", { className: "modal wide" },
             React.createElement("div", { className: "modal-head" },
                 React.createElement("div", null,
-                    React.createElement("h3", null, "New Tax Invoice"),
-                    React.createElement("div", { className: "muted", style: { fontSize: 13, marginTop: 2 } }, "Invoice number assigned automatically on save")),
+                    React.createElement("h3", null, editing ? 'Edit Invoice' : 'New Tax Invoice'),
+                    React.createElement("div", { className: "muted", style: { fontSize: 13, marginTop: 2 } }, editing ? `Editing ${editing.number}` : 'Invoice number assigned automatically on save')),
                 React.createElement("button", { className: "modal-close", onClick: onClose }, "\u2715")),
             React.createElement("div", { className: "grid grid-2" },
                 React.createElement("div", { className: "field" },
@@ -18337,7 +18373,7 @@ function InvoiceForm({ data, company, actions, openDoc, onClose }) {
                     React.createElement("span", { className: "num" }, money(company, totals.total)))),
             React.createElement("div", { className: "flex gap-10", style: { marginTop: 20, justifyContent: 'flex-end' } },
                 React.createElement("button", { className: "btn", onClick: onClose }, "Cancel"),
-                React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : 'Save Invoice')))));
+                React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : (editing ? 'Save Changes' : 'Save Invoice'))))));
 }
 /* ---------- Quotations ---------- */
 function Quotations({ data, company, actions, openDoc }) {
@@ -18420,7 +18456,8 @@ function QuotationForm({ data, company, actions, openDoc, editing, onClose }) {
             };
             let row;
             if (editing) {
-                row = await actions.update('quotations', editing.id, payload, 'Quotation Updated', `${editing.number} — ${customerName} — ${money(company, totals.total)}`);
+                row = await actions.updateDocWithHistory('quotations', editing.id, payload, 'Quotation Updated', `${editing.number} — ${customerName} — ${money(company, totals.total)}`);
+                row = { ...editing, ...payload, id: editing.id };
             }
             else {
                 const seq = await nextQuotationNumber(company.id);
@@ -18513,11 +18550,22 @@ function QuotationForm({ data, company, actions, openDoc, editing, onClose }) {
                 React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : (editing ? 'Save Changes' : 'Save Quotation'))))));
 }
 /* ---------- Real PDF generation (renders the invoice, no print dialog) ---------- */
+async function waitForImages(el) {
+    const imgs = Array.from(el.querySelectorAll('img'));
+    await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(res => { img.onload = res; img.onerror = res; })));
+}
 async function generateDocPdfBlob(elementId) {
     const el = document.getElementById(elementId);
     if (!el)
         throw new Error("Couldn't find the document to render.");
-    const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+    await waitForImages(el);
+    // Force a desktop-width render regardless of the current device, so the
+    // PDF always looks like a properly formatted document — not a cramped,
+    // stacked mobile layout captured as a screenshot.
+    const canvas = await html2canvas(el, {
+        scale: 2, useCORS: true, backgroundColor: '#ffffff',
+        windowWidth: 900, windowHeight: Math.max(el.scrollHeight + 200, 1200),
+    });
     const imgData = canvas.toDataURL('image/png');
     const { jsPDF } = window.jspdf;
     const pxToPt = 0.75; // 96dpi px -> pt, then we scale canvas back down (scale:2 above)
@@ -20155,6 +20203,7 @@ function Settings({ data, company, actions, companies, user, onSwitchCompany, on
         React.createElement(RemarksPresetsSettings, { company: company, actions: actions }),
         React.createElement(CatalogSettings, { data: data, company: company, actions: actions }),
         React.createElement(TeamSettings, { company: company, data: data, actions: actions, user: user }),
+        React.createElement(BackupSettings, { company: company, data: data, actions: actions, user: user }),
         React.createElement(AccountSettings, { user: user })));
 }
 function AddCompanyInline({ user, actions, onCreated }) {
@@ -20451,6 +20500,71 @@ function InviteForm({ company, data, user, actions, onGenerated, onClose, genera
                 React.createElement("div", { className: "flex gap-10", style: { justifyContent: 'flex-end' } },
                     React.createElement("button", { className: "btn", onClick: onClose }, "Cancel"),
                     React.createElement("button", { className: "btn btn-primary", onClick: generate, disabled: busy }, busy ? 'Generating…' : 'Generate Invite Code')))))));
+}
+function BackupSettings({ company, data, actions, user }) {
+    const [restoring, setRestoring] = useState(false);
+    const fileInputRef = useRef(null);
+    const downloadBackup = () => {
+        const exportData = {};
+        TABLES.forEach(t => { exportData[t] = data[t] || []; });
+        const payload = {
+            exported_at: new Date().toISOString(),
+            company_name: company.name,
+            ...exportData,
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${company.name.replace(/[^a-z0-9]+/gi, '-')}-backup-${todayISO()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        actions.notify("Backup downloaded");
+    };
+    const handleFile = (e) => {
+        const file = e.target.files[0];
+        if (!file)
+            return;
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+            let parsed;
+            try {
+                parsed = JSON.parse(ev.target.result);
+            }
+            catch (err) {
+                alert("Couldn't read that file — make sure it's a backup JSON exported from this app.");
+                return;
+            }
+            if (!Array.isArray(parsed.invoices) && !Array.isArray(parsed.technicians)) {
+                alert("This doesn't look like a valid backup file.");
+                return;
+            }
+            if (!confirm(`Restore this backup into "${company.name}"? This ADDS every record from the backup as new entries — it does not overwrite or remove anything already here. If you've already restored this backup once, doing it again will create duplicates.`))
+                return;
+            setRestoring(true);
+            try {
+                const count = await restoreBackupData(company.id, parsed);
+                await actions.logAndRecord('Backup Restored', `${count} records added from backup dated ${parsed.exported_at || 'unknown'}`);
+                actions.notify(`Restored ${count} records — reloading…`);
+                await actions.reloadData();
+            }
+            catch (err) {
+                alert("Restore failed: " + err.message);
+            }
+            finally {
+                setRestoring(false);
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    };
+    return (React.createElement("div", { className: "card", style: { maxWidth: 680, marginBottom: 20 } },
+        React.createElement("div", { className: "section-title" }, "Backup & Restore"),
+        React.createElement("div", { className: "muted", style: { fontSize: 13, marginBottom: 14 } }, "Your data already lives safely on Firebase, but it's good practice to keep your own copy too. Download a backup regularly \u2014 especially before making big changes."),
+        React.createElement("div", { className: "flex gap-10", style: { flexWrap: 'wrap' } },
+            React.createElement("button", { className: "btn btn-primary", onClick: downloadBackup }, "\u2B07 Download Backup (JSON)"),
+            React.createElement("button", { className: "btn", onClick: () => fileInputRef.current && fileInputRef.current.click(), disabled: restoring }, restoring ? 'Restoring…' : '⬆ Restore from Backup'),
+            React.createElement("input", { ref: fileInputRef, type: "file", accept: "application/json,.json", style: { display: 'none' }, onChange: handleFile }))));
 }
 /* ============================================================
    Root App
