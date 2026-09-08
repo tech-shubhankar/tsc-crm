@@ -217,8 +217,8 @@
 
   /* ---------- Print ---------- */
   @media print{
-    .sidebar, .topbar, .doc-page-bar, .hamburger{ display:none !important; }
-    .doc-page-shell{ background:#fff; }
+    .sidebar, .topbar, .doc-page-bar, .hamburger, .no-print{ display:none !important; }
+    .doc-page-shell{ background:#fff; min-height:0; }
     .doc-page-wrap{ max-width:100%; margin:0; padding:0; }
     .doc-sheet{ box-shadow:none; padding:14mm; }
     body{ background:#fff; }
@@ -18150,12 +18150,12 @@ function Invoices({ data, company, actions, openDoc }) {
     const doCancel = (inv) => {
         if (!confirm("Cancel this invoice? It stays in history marked CANCELLED."))
             return;
-        actions.update('invoices', inv.id, { cancelled: true }, 'Invoice Cancelled', inv.number);
+        actions.updateDocWithHistory('invoices', inv.id, { cancelled: true }, 'Invoice Cancelled', inv.number);
     };
     const markFullyPaid = (inv) => {
-        if (!confirm(`Mark ${inv.number} as fully paid? This settles the remaining due amount.`))
+        if (!confirm(`Mark ${inv.number} as fully paid? This converts it to a normal full-payment bill.`))
             return;
-        actions.update('invoices', inv.id, { advance_paid: inv.total }, 'Invoice Settled — Full Payment', `${inv.number} — balance cleared`);
+        actions.updateDocWithHistory('invoices', inv.id, { advance_paid: inv.total, payment_type: 'Full' }, 'Invoice Settled — Full Payment', `${inv.number} — converted to full payment`);
     };
     return (React.createElement("div", null,
         React.createElement("div", { className: "flex-between", style: { marginBottom: 16, flexWrap: 'wrap', gap: 10 } },
@@ -18347,7 +18347,7 @@ function Quotations({ data, company, actions, openDoc }) {
     const doCancel = (q) => {
         if (!confirm("Cancel this quotation?"))
             return;
-        actions.update('quotations', q.id, { cancelled: true }, 'Quotation Cancelled', q.number);
+        actions.updateDocWithHistory('quotations', q.id, { cancelled: true }, 'Quotation Cancelled', q.number);
     };
     return (React.createElement("div", null,
         React.createElement("div", { className: "flex-between", style: { marginBottom: 16 } },
@@ -18578,7 +18578,7 @@ function DocFullPage({ type, doc, company, actions, onClose }) {
     const saveTheme = async () => {
         setSavingTheme(true);
         try {
-            await actions.update(isInvoice ? 'invoices' : 'quotations', doc.id, { theme: themePick }, 'Invoice Theme Changed', `${doc.number} → ${themePick}`);
+            await actions.updateDocWithHistory(isInvoice ? 'invoices' : 'quotations', doc.id, { theme: themePick }, 'Invoice Theme Changed', `${doc.number} → ${themePick}`);
             actions.notify("Theme updated");
             setChangingTheme(false);
         }
@@ -18594,11 +18594,11 @@ function DocFullPage({ type, doc, company, actions, onClose }) {
     const hasPayment = isInvoice && (bank.account_no || bank.ifsc || bank.bank_name || company.upi_id);
     const [settling, setSettling] = useState(false);
     const markFullyPaid = async () => {
-        if (!confirm(`Mark ${doc.number} as fully paid? This settles the remaining due amount.`))
+        if (!confirm(`Mark ${doc.number} as fully paid? This converts it to a normal full-payment bill.`))
             return;
         setSettling(true);
         try {
-            await actions.update('invoices', doc.id, { advance_paid: doc.total }, 'Invoice Settled — Full Payment', `${doc.number} — balance cleared`);
+            await actions.updateDocWithHistory('invoices', doc.id, { advance_paid: doc.total, payment_type: 'Full' }, 'Invoice Settled — Full Payment', `${doc.number} — converted to full payment`);
             actions.notify("Marked as fully paid");
         }
         finally {
@@ -18794,7 +18794,22 @@ function DocFullPage({ type, doc, company, actions, onClose }) {
                         React.createElement("img", { src: qrUrl, alt: "UPI QR code" }),
                         React.createElement("div", null,
                             "Scan to pay ",
-                            money(company, doc.total))))))))));
+                            money(company, doc.total))))))),
+            doc.history && doc.history.length > 0 && (React.createElement("div", { className: "card no-print", style: { marginTop: 20 } },
+                React.createElement("div", { className: "section-title" }, "Edit History"),
+                React.createElement("div", { className: "table-wrap" },
+                    React.createElement("table", null,
+                        React.createElement("thead", null,
+                            React.createElement("tr", null,
+                                React.createElement("th", null, "Time"),
+                                React.createElement("th", null, "Action"),
+                                React.createElement("th", null, "Details"),
+                                React.createElement("th", null, "By"))),
+                        React.createElement("tbody", null, [...doc.history].reverse().map((h, idx) => (React.createElement("tr", { key: idx },
+                            React.createElement("td", { className: "num", style: { whiteSpace: 'nowrap' } }, dtLabel(h.ts)),
+                            React.createElement("td", null, h.action),
+                            React.createElement("td", null, h.details || '—'),
+                            React.createElement("td", null, h.user_email || '—'))))))))))));
 }
 /* ---------- Technicians ---------- */
 function Technicians({ data, company, actions, isTech, myTechnicianId }) {
@@ -19110,7 +19125,7 @@ function Collection({ data, company, actions }) {
                     React.createElement("button", { className: "btn btn-primary", onClick: save }, "Save")))))));
 }
 /* ---------- Deposit ---------- */
-function Deposit({ data, company, actions }) {
+function Deposit({ data, company, actions, isTech }) {
     var _a;
     const [showForm, setShowForm] = useState(false);
     const activeTechs = data.technicians.filter(t => t.active !== false);
@@ -19141,7 +19156,7 @@ function Deposit({ data, company, actions }) {
     return (React.createElement("div", null,
         React.createElement("div", { className: "flex-between", style: { marginBottom: 16 } },
             React.createElement("div", { className: "muted" }, "Money a technician hands over from their collection"),
-            React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ Record Deposit")),
+            !isTech && React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ Record Deposit")),
         React.createElement("div", { className: "section-title" }, "Collected \u2192 Deposited \u2192 Currently With Technician \u2192 Due"),
         React.createElement("div", { className: "table-wrap", style: { marginBottom: 24 } },
             React.createElement("table", null,
@@ -19351,7 +19366,7 @@ function Stock({ data, company, actions, isTech, isAdminOrSub, myTechnicianId })
                 isAdminOrSub && React.createElement("button", { className: "btn btn-teal", onClick: () => setShowAdjust(true) }, "+ Stock In / Out"),
                 isAdminOrSub && React.createElement("button", { className: "btn btn-copper", onClick: () => setShowIssue(true) }, "+ Issue Parts"),
                 React.createElement("button", { className: "btn", onClick: () => setShowUse(true) }, "+ Record Usage"),
-                React.createElement("button", { className: "btn", onClick: () => setShowReturn(true) }, "+ Record Return"))),
+                isAdminOrSub && React.createElement("button", { className: "btn", onClick: () => setShowReturn(true) }, "+ Record Return"))),
         tab === 'overview' && (activeTechs.length === 0 ? React.createElement("div", { className: "card empty" },
             React.createElement("h4", null, "No technicians")) :
             React.createElement("div", { className: "grid grid-2" }, activeTechs.map(t => {
@@ -20513,7 +20528,12 @@ function App() {
     const actions = {
         create: async (table, payload, actionLabel, details) => {
             try {
-                const row = await dbInsert(company.id, table, payload);
+                let finalPayload = payload;
+                if (table === 'invoices' || table === 'quotations') {
+                    const entry = { ts: new Date().toISOString(), action: actionLabel || 'Created', details: (payload.number || '') + ' created', user_email: user.email };
+                    finalPayload = { ...payload, history: [entry] };
+                }
+                const row = await dbInsert(company.id, table, finalPayload);
                 setData(d => ({ ...d, [table]: [...d[table], row] }));
                 if (actionLabel)
                     await logAndRecord(actionLabel, typeof details === 'function' ? details(row) : details);
@@ -20561,6 +20581,18 @@ function App() {
             }
             catch (err) {
                 alert('Save failed: ' + err.message);
+                throw err;
+            }
+        },
+        updateDocWithHistory: async (table, id, payload, actionLabel, historyDetails) => {
+            const entry = { ts: new Date().toISOString(), action: actionLabel, details: historyDetails || '', user_email: user.email };
+            try {
+                await tableRef(company.id, table).doc(id).update({ ...payload, history: firebase.firestore.FieldValue.arrayUnion(entry) });
+                setData(d => ({ ...d, [table]: d[table].map(r => r.id === id ? { ...r, ...payload, history: [...(r.history || []), entry] } : r) }));
+                await logAndRecord(actionLabel, historyDetails || '');
+            }
+            catch (err) {
+                alert('Update failed: ' + err.message);
                 throw err;
             }
         },
