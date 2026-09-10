@@ -17696,13 +17696,46 @@ async function loadUserCompanies(uid) {
 // Restore a backup export by re-creating all its records as new documents
 // in the given company (chunked batched writes; never overwrites first —
 // caller is responsible for warning the user this ADDS records).
-async function restoreBackupData(companyId, backupData) {
+function recordSignature(rec) {
+    const { id, created_at, history, ...rest } = rec;
+    return JSON.stringify(rest);
+}
+// Picks the right "is this really the same record" key per table —
+// invoice/quotation numbers, technician name+mobile, catalog/part names
+// are strong natural identities; everything else falls back to a full
+// content signature (safe for re-importing the exact same backup twice).
+function dedupeKey(table, rec) {
+    if (table === 'invoices' || table === 'quotations')
+        return 'num:' + rec.number;
+    if (table === 'technicians')
+        return 'tech:' + String(rec.name || '').trim().toLowerCase() + '|' + String(rec.mobile || '').trim();
+    if (table === 'catalog')
+        return 'cat:' + String(rec.name || '').trim().toLowerCase();
+    if (table === 'main_stock')
+        return 'stock:' + String(rec.part_name || '').trim().toLowerCase() + '|' + String(rec.part_code || '').trim().toLowerCase();
+    return 'sig:' + recordSignature(rec);
+}
+// Restore a backup export, skipping any record that already exists
+// (by the table's natural identity, or an exact content match) so
+// restoring the same backup more than once never creates duplicates.
+async function restoreBackupData(companyId, backupData, existingData) {
     const CHUNK = 400;
-    let count = 0;
+    let added = 0, skipped = 0;
     for (const table of TABLES) {
         const records = (backupData[table] || []).filter(r => r && typeof r === 'object');
-        for (let i = 0; i < records.length; i += CHUNK) {
-            const chunk = records.slice(i, i + CHUNK);
+        const existingKeys = new Set((existingData[table] || []).map(r => dedupeKey(table, r)));
+        const toWrite = [];
+        for (const rec of records) {
+            const key = dedupeKey(table, rec);
+            if (existingKeys.has(key)) {
+                skipped++;
+                continue;
+            }
+            existingKeys.add(key); // also guards against duplicates within the backup file itself
+            toWrite.push(rec);
+        }
+        for (let i = 0; i < toWrite.length; i += CHUNK) {
+            const chunk = toWrite.slice(i, i + CHUNK);
             const batch = db.batch();
             chunk.forEach(rec => {
                 const { id, ...rest } = rec;
@@ -17710,10 +17743,10 @@ async function restoreBackupData(companyId, backupData) {
                 batch.set(ref, rest);
             });
             await batch.commit();
-            count += chunk.length;
+            added += chunk.length;
         }
     }
-    return count;
+    return { added, skipped };
 }
 async function createCompany(name, user) {
     const payload = {
@@ -20484,13 +20517,13 @@ function BackupSettings({ company, data, actions, user }) {
             }
             const totalRecords = TABLES.reduce((s, t) => s + ((parsed[t] || []).length), 0);
             const breakdown = TABLES.filter(t => (parsed[t] || []).length > 0).map(t => `${t.replace(/_/g, ' ')}: ${parsed[t].length}`).join('\n');
-            if (!confirm(`Restore this backup (exported ${parsed.exported_at ? dLabel(parsed.exported_at.slice(0, 10)) : 'unknown date'}) into "${company.name}"?\n\nThis will ADD ${totalRecords} records as new entries:\n${breakdown}\n\nIt does NOT remove or overwrite anything already here. If you've already restored this exact backup once, doing it again WILL create duplicates and inflate your totals — only restore a given backup ONE time.`))
+            if (!confirm(`Restore this backup (exported ${parsed.exported_at ? dLabel(parsed.exported_at.slice(0, 10)) : 'unknown date'}) into "${company.name}"?\n\nUp to ${totalRecords} records will be checked:\n${breakdown}\n\nAny record that already exists here (same invoice/quotation number, technician, part, or exact entry) will be skipped automatically — only genuinely new records get added.`))
                 return;
             setRestoring(true);
             try {
-                const count = await restoreBackupData(company.id, parsed);
-                await actions.logAndRecord('Backup Restored', `${count} records added from backup dated ${parsed.exported_at || 'unknown'}`);
-                actions.notify(`Restored ${count} records — reloading…`);
+                const { added, skipped } = await restoreBackupData(company.id, parsed, data);
+                await actions.logAndRecord('Backup Restored', `${added} added, ${skipped} already existed (skipped) — from backup dated ${parsed.exported_at || 'unknown'}`);
+                actions.notify(`Restored ${added} new records (${skipped} duplicates skipped) — reloading…`);
                 await actions.reloadData();
             }
             catch (err) {
