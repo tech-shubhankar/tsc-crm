@@ -10,9 +10,6 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js" onerror="this.remove()"></script>
-<!-- For real, direct-download PDFs (no print dialog) and PDF file sharing -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   :root{
     --ink:#1B2430; --ink-soft:#2C394A;
@@ -36,11 +33,11 @@
   a{ color:inherit; }
   img{ max-width:100%; }
 
-  #root{ min-height:100vh; min-height:100dvh; }
-  .app-shell{ display:flex; min-height:100vh; min-height:100dvh; }
+  #root{ min-height:100vh; min-height:100dvh; min-height:calc(var(--vh,1vh) * 100); }
+  .app-shell{ display:flex; min-height:100vh; min-height:100dvh; min-height:calc(var(--vh,1vh) * 100); }
   .sidebar{
     width:var(--sidebar-w); flex-shrink:0; background:var(--ink); color:#E9E4D8;
-    display:flex; flex-direction:column; position:sticky; top:0; height:100vh; height:100dvh; z-index:30;
+    display:flex; flex-direction:column; position:sticky; top:0; height:100vh; height:100dvh; height:calc(var(--vh,1vh) * 100); z-index:30;
   }
   .sidebar-brand{ padding:22px 20px 16px; border-bottom:1px solid rgba(255,255,255,0.09); }
   .sidebar-brand h1{ color:#fff; font-size:19px; }
@@ -131,7 +128,7 @@
   @media(max-width:900px){ .line-item-row{ grid-template-columns:1fr 1fr; } }
 
   /* ---------- Login / Setup screens ---------- */
-  .login-screen{ min-height:100vh; min-height:100dvh; display:flex; align-items:center; justify-content:center; background:radial-gradient(circle at 30% 20%, #263145, #131A24); padding:20px; }
+  .login-screen{ min-height:100vh; min-height:100dvh; min-height:calc(var(--vh,1vh) * 100); display:flex; align-items:center; justify-content:center; background:radial-gradient(circle at 30% 20%, #263145, #131A24); padding:20px; }
   .login-card{ background:var(--paper-card); border-radius:12px; padding:34px 32px; width:100%; max-width:380px; }
   .login-card h1{ font-size:26px; margin-bottom:4px; }
   .login-hint{ font-size:12px; color:var(--text-mute); margin-top:14px; text-align:center; }
@@ -150,7 +147,7 @@
     .content{ padding:18px 16px 90px; }
     .modal{ padding:20px 18px 22px; }
     .modal-overlay{ padding:0; align-items:flex-start; }
-    .modal{ border-radius:0; max-width:100%; min-height:100vh; min-height:100dvh; }
+    .modal{ border-radius:0; max-width:100%; min-height:100vh; min-height:100dvh; min-height:calc(var(--vh,1vh) * 100); }
     .line-item-row{ grid-template-columns:1fr 1fr; }
     .doc-meta-grid{ grid-template-columns:1fr !important; }
   }
@@ -160,7 +157,7 @@
   ::-webkit-scrollbar-thumb{ background:#D3C9B3; border-radius:10px; }
 
   /* ================= Full-page invoice/quotation view ================= */
-  .doc-page-shell{ min-height:100vh; min-height:100dvh; background:#EEE9DF; }
+  .doc-page-shell{ min-height:100vh; min-height:100dvh; min-height:calc(var(--vh,1vh) * 100); background:#EEE9DF; }
   .doc-page-bar{ position:sticky; top:0; z-index:20; background:var(--ink); color:#fff; padding:12px 24px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
   .doc-page-bar .btn{ background:rgba(255,255,255,0.1); border-color:rgba(255,255,255,0.2); color:#fff; }
   .doc-page-bar .btn-primary{ background:var(--teal); border-color:var(--teal); }
@@ -18156,7 +18153,7 @@ function addToCatalog(actions, name, rate) {
     actions.notify("Saved to catalog");
 }
 /* ---------- Invoices ---------- */
-function Invoices({ data, company, actions, openDoc }) {
+function Invoices({ data, company, actions, openDoc, isAdminOrSub }) {
     const [showForm, setShowForm] = useState(false);
     const [editing, setEditing] = useState(null);
     const [filter, setFilter] = useState('All');
@@ -18218,9 +18215,9 @@ function Invoices({ data, company, actions, openDoc }) {
                         React.createElement("td", null,
                             React.createElement("div", { className: "flex gap-8" },
                                 React.createElement("button", { className: "btn btn-sm", onClick: () => openDoc('invoice', inv) }, "View"),
-                                !inv.cancelled && React.createElement("button", { className: "btn btn-sm", onClick: () => { setEditing(inv); setShowForm(true); } }, "Edit"),
-                                !inv.cancelled && due > 0 && React.createElement("button", { className: "btn btn-sm btn-teal", onClick: () => markFullyPaid(inv) }, "Mark Full Payment"),
-                                !inv.cancelled && React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => doCancel(inv) }, "Cancel")))));
+                                isAdminOrSub && !inv.cancelled && React.createElement("button", { className: "btn btn-sm", onClick: () => { setEditing(inv); setShowForm(true); } }, "Edit"),
+                                isAdminOrSub && !inv.cancelled && due > 0 && React.createElement("button", { className: "btn btn-sm btn-teal", onClick: () => markFullyPaid(inv) }, "Mark Full Payment"),
+                                isAdminOrSub && !inv.cancelled && React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => doCancel(inv) }, "Cancel")))));
                 }))))),
         showForm && React.createElement(InvoiceForm, { data: data, company: company, actions: actions, openDoc: openDoc, editing: editing, onClose: () => { setShowForm(false); setEditing(null); } })));
 }
@@ -18376,7 +18373,7 @@ function InvoiceForm({ data, company, actions, openDoc, editing, onClose }) {
                 React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : (editing ? 'Save Changes' : 'Save Invoice'))))));
 }
 /* ---------- Quotations ---------- */
-function Quotations({ data, company, actions, openDoc }) {
+function Quotations({ data, company, actions, openDoc, isAdminOrSub }) {
     const [showForm, setShowForm] = useState(false);
     const [editing, setEditing] = useState(null);
     const sorted = [...data.quotations].sort((a, b) => b.date.localeCompare(a.date));
@@ -18413,8 +18410,8 @@ function Quotations({ data, company, actions, openDoc }) {
                     React.createElement("td", null,
                         React.createElement("div", { className: "flex gap-8" },
                             React.createElement("button", { className: "btn btn-sm", onClick: () => openDoc('quotation', q) }, "View"),
-                            !q.cancelled && React.createElement("button", { className: "btn btn-sm", onClick: () => { setEditing(q); setShowForm(true); } }, "Edit"),
-                            !q.cancelled && React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => doCancel(q) }, "Cancel")))))))))),
+                            isAdminOrSub && !q.cancelled && React.createElement("button", { className: "btn btn-sm", onClick: () => { setEditing(q); setShowForm(true); } }, "Edit"),
+                            isAdminOrSub && !q.cancelled && React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => doCancel(q) }, "Cancel")))))))))),
         showForm && React.createElement(QuotationForm, { data: data, company: company, actions: actions, openDoc: openDoc, editing: editing, onClose: () => setShowForm(false) })));
 }
 function QuotationForm({ data, company, actions, openDoc, editing, onClose }) {
@@ -18549,32 +18546,6 @@ function QuotationForm({ data, company, actions, openDoc, editing, onClose }) {
                 React.createElement("button", { className: "btn", onClick: onClose }, "Cancel"),
                 React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : (editing ? 'Save Changes' : 'Save Quotation'))))));
 }
-/* ---------- Real PDF generation (renders the invoice, no print dialog) ---------- */
-async function waitForImages(el) {
-    const imgs = Array.from(el.querySelectorAll('img'));
-    await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(res => { img.onload = res; img.onerror = res; })));
-}
-async function generateDocPdfBlob(elementId) {
-    const el = document.getElementById(elementId);
-    if (!el)
-        throw new Error("Couldn't find the document to render.");
-    await waitForImages(el);
-    // Force a desktop-width render regardless of the current device, so the
-    // PDF always looks like a properly formatted document — not a cramped,
-    // stacked mobile layout captured as a screenshot.
-    const canvas = await html2canvas(el, {
-        scale: 2, useCORS: true, backgroundColor: '#ffffff',
-        windowWidth: 900, windowHeight: Math.max(el.scrollHeight + 200, 1200),
-    });
-    const imgData = canvas.toDataURL('image/png');
-    const { jsPDF } = window.jspdf;
-    const pxToPt = 0.75; // 96dpi px -> pt, then we scale canvas back down (scale:2 above)
-    const pageWidth = (canvas.width / 2) * pxToPt;
-    const pageHeight = (canvas.height / 2) * pxToPt;
-    const pdf = new jsPDF({ unit: 'pt', format: [pageWidth, pageHeight] });
-    pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight);
-    return pdf.output('blob');
-}
 /* ---------- WhatsApp share ---------- */
 function normalizeIndianPhone(mobile) {
     const digits = (mobile || '').replace(/\D/g, '');
@@ -18618,7 +18589,7 @@ function buildShareText(doc, company, isInvoice) {
     return lines.join('\n');
 }
 /* ---------- Full-page document view (invoice / quotation) ---------- */
-function DocFullPage({ type, doc, company, actions, onClose }) {
+function DocFullPage({ type, doc, company, actions, isAdminOrSub, onClose }) {
     const isInvoice = type === 'invoice';
     const [changingTheme, setChangingTheme] = useState(false);
     const [themePick, setThemePick] = useState(doc.theme || 'classic');
@@ -18659,39 +18630,12 @@ function DocFullPage({ type, doc, company, actions, onClose }) {
             return;
         downloadAsWord(`${doc.number}.doc`, el.innerHTML, doc.number);
     };
-    const [pdfBusy, setPdfBusy] = useState(false);
     const [waBusy, setWaBusy] = useState(false);
-    const downloadPdf = async () => {
-        setPdfBusy(true);
-        try {
-            const blob = await generateDocPdfBlob('doc-sheet-content');
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `${doc.number}.pdf`;
-            a.click();
-            URL.revokeObjectURL(url);
-        }
-        catch (err) {
-            alert("Couldn't generate the PDF: " + err.message);
-        }
-        finally {
-            setPdfBusy(false);
-        }
-    };
+    const printOrSavePdf = () => { window.print(); };
     const shareOnWhatsApp = async () => {
         const text = buildShareText(doc, company, isInvoice);
         setWaBusy(true);
         try {
-            try {
-                const blob = await generateDocPdfBlob('doc-sheet-content');
-                const file = new File([blob], `${doc.number}.pdf`, { type: 'application/pdf' });
-                if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                    await navigator.share({ files: [file], title: doc.number, text });
-                    return;
-                }
-            }
-            catch (err) { /* PDF generation or file-share unsupported — fall back below */ }
             if (navigator.share) {
                 try {
                     await navigator.share({ title: doc.number, text });
@@ -18713,11 +18657,10 @@ function DocFullPage({ type, doc, company, actions, onClose }) {
         React.createElement("div", { className: "doc-page-bar" },
             React.createElement("button", { className: "btn", onClick: onClose }, "\u2190 Back"),
             React.createElement("div", { className: "flex gap-8", style: { flexWrap: 'wrap' } },
-                React.createElement("button", { className: "btn", onClick: () => setChangingTheme(v => !v) }, "\uD83C\uDFA8 Change Theme"),
-                isInvoice && due > 0 && !doc.cancelled && React.createElement("button", { className: "btn btn-teal", onClick: markFullyPaid, disabled: settling }, settling ? 'Saving…' : '✓ Mark Full Payment'),
+                isAdminOrSub && React.createElement("button", { className: "btn", onClick: () => setChangingTheme(v => !v) }, "\uD83C\uDFA8 Change Theme"),
+                isAdminOrSub && isInvoice && due > 0 && !doc.cancelled && React.createElement("button", { className: "btn btn-teal", onClick: markFullyPaid, disabled: settling }, settling ? 'Saving…' : '✓ Mark Full Payment'),
                 React.createElement("button", { className: "btn", style: { background: '#25D366', borderColor: '#25D366', color: '#fff' }, onClick: shareOnWhatsApp, disabled: waBusy }, waBusy ? 'Preparing…' : '💬 Share on WhatsApp'),
-                React.createElement("button", { className: "btn", onClick: () => window.print() }, "\uD83D\uDDA8 Print"),
-                React.createElement("button", { className: "btn", onClick: downloadPdf, disabled: pdfBusy }, pdfBusy ? 'Generating…' : '⬇ Download PDF'),
+                React.createElement("button", { className: "btn", onClick: printOrSavePdf }, "\uD83D\uDDA8 Print / Save as PDF"),
                 React.createElement("button", { className: "btn btn-primary", onClick: wordExport }, "\uD83D\uDCC4 Download Word"))),
         changingTheme && (React.createElement("div", { style: { background: 'var(--paper-card)', borderBottom: '1px solid var(--line)', padding: '12px 24px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
             React.createElement("select", { value: themePick, onChange: e => setThemePick(e.target.value), style: { width: 220 } }, THEMES.map(t => React.createElement("option", { key: t.id, value: t.id }, t.label))),
@@ -20539,7 +20482,9 @@ function BackupSettings({ company, data, actions, user }) {
                 alert("This doesn't look like a valid backup file.");
                 return;
             }
-            if (!confirm(`Restore this backup into "${company.name}"? This ADDS every record from the backup as new entries — it does not overwrite or remove anything already here. If you've already restored this backup once, doing it again will create duplicates.`))
+            const totalRecords = TABLES.reduce((s, t) => s + ((parsed[t] || []).length), 0);
+            const breakdown = TABLES.filter(t => (parsed[t] || []).length > 0).map(t => `${t.replace(/_/g, ' ')}: ${parsed[t].length}`).join('\n');
+            if (!confirm(`Restore this backup (exported ${parsed.exported_at ? dLabel(parsed.exported_at.slice(0, 10)) : 'unknown date'}) into "${company.name}"?\n\nThis will ADD ${totalRecords} records as new entries:\n${breakdown}\n\nIt does NOT remove or overwrite anything already here. If you've already restored this exact backup once, doing it again WILL create duplicates and inflate your totals — only restore a given backup ONE time.`))
                 return;
             setRestoring(true);
             try {
@@ -20590,6 +20535,31 @@ function App() {
         return () => clearTimeout(t);
     }, [toast]);
     const notify = (msg) => setToast(msg);
+    // Robust mobile viewport-height fix: some Android browsers don't update
+    // 100vh/100dvh reliably when the address bar shows/hides, causing
+    // full-height elements (sidebar, modals) to render short with a gap.
+    // This is the standard, battle-tested workaround: track the real
+    // viewport height in JS and expose it as a CSS variable.
+    useEffect(() => {
+        const setVh = () => {
+            document.documentElement.style.setProperty('--vh', (window.innerHeight * 0.01) + 'px');
+        };
+        setVh();
+        window.addEventListener('resize', setVh);
+        window.addEventListener('orientationchange', setVh);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', setVh);
+            window.visualViewport.addEventListener('scroll', setVh);
+        }
+        return () => {
+            window.removeEventListener('resize', setVh);
+            window.removeEventListener('orientationchange', setVh);
+            if (window.visualViewport) {
+                window.visualViewport.removeEventListener('resize', setVh);
+                window.visualViewport.removeEventListener('scroll', setVh);
+            }
+        };
+    }, []);
     useEffect(() => {
         if (!fbConfig)
             return;
@@ -20753,19 +20723,19 @@ function App() {
                     company.name,
                     "\u2026"))));
     }
+    const role = (membership === null || membership === void 0 ? void 0 : membership.role) || 'admin';
+    const myTechnicianId = (membership === null || membership === void 0 ? void 0 : membership.technician_id) || null;
+    const isAdmin = role === 'admin';
+    const isAdminOrSub = role === 'admin' || role === 'sub_admin';
+    const isTech = role === 'technician';
     if (viewingDoc) {
         const liveDoc = (viewingDoc.type === 'invoice' ? data.invoices : data.quotations).find(d => d.id === viewingDoc.id);
         if (!liveDoc) {
             setViewingDoc(null);
             return null;
         }
-        return React.createElement(DocFullPage, { type: viewingDoc.type, doc: liveDoc, company: company, actions: actions, onClose: closeDoc });
+        return React.createElement(DocFullPage, { type: viewingDoc.type, doc: liveDoc, company: company, actions: actions, isAdminOrSub: isAdminOrSub, onClose: closeDoc });
     }
-    const role = (membership === null || membership === void 0 ? void 0 : membership.role) || 'admin';
-    const myTechnicianId = (membership === null || membership === void 0 ? void 0 : membership.technician_id) || null;
-    const isAdmin = role === 'admin';
-    const isAdminOrSub = role === 'admin' || role === 'sub_admin';
-    const isTech = role === 'technician';
     const allNav = [
         { id: 'dashboard', label: 'Dashboard', icon: '◆', show: true },
         { id: 'invoices', label: 'Invoices', icon: '▤', show: true },
