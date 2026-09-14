@@ -17548,6 +17548,26 @@ function invoiceStatus(inv) {
         return 'Advance / Partial';
     return 'Due';
 }
+function inchEarning(company, inch) {
+    const rates = company.inch_rates || [];
+    const match = rates.find(r => Number(r.inch) === Number(inch));
+    return match ? Number(match.amount) : 0;
+}
+function techJobStats(dt, techId) {
+    const jobs = (dt.jobs || []).filter(j => j.assigned_tech_id === techId);
+    const closed = jobs.filter(j => j.status === 'Closed');
+    return {
+        totalJobs: jobs.length,
+        closedJobs: closed.length,
+        totalEarning: closed.reduce((s, j) => s + Number(j.tech_earning || 0), 0),
+        totalJobCollection: closed.reduce((s, j) => s + Number(j.amount_collected || 0), 0),
+    };
+}
+const JOB_STATUSES = ['Created', 'Assigned', 'Confirmed', 'Closed'];
+function jobStatusBadge(status) {
+    const map = { 'Created': 'badge-teal', 'Assigned': 'badge-amber', 'Confirmed': 'badge-copper', 'Closed': 'badge-green' };
+    return React.createElement("span", { className: "badge " + (map[status] || 'badge-teal') }, status);
+}
 function statusBadge(status) {
     const map = { 'Fully Paid': 'badge-green', 'Advance / Partial': 'badge-amber', 'Due': 'badge-red', 'Cancelled': 'badge-copper' };
     return React.createElement("span", { className: "badge " + (map[status] || 'badge-teal') }, status);
@@ -17588,11 +17608,12 @@ const initFirebase = (cfg) => {
     return { auth, db };
 };
 const TABLES = ['technicians', 'invoices', 'quotations', 'collections', 'deposits', 'office_cash',
-    'main_stock', 'stock_issues', 'stock_usage', 'stock_returns', 'catalog', 'main_stock_adjustments'];
+    'main_stock', 'stock_issues', 'stock_usage', 'stock_returns', 'catalog', 'main_stock_adjustments', 'jobs'];
 const companyRef = (companyId) => db.collection('companies').doc(companyId);
 const tableRef = (companyId, table) => companyRef(companyId).collection(table);
 const ADMIN_ONLY_TABLES = ['office_cash', 'main_stock', 'main_stock_adjustments', 'catalog', 'stock_issues'];
 const TECH_SCOPED_TABLES = ['collections', 'deposits', 'stock_usage', 'stock_returns'];
+const JOB_SCOPE_FIELD = 'assigned_tech_id'; // 'jobs' is scoped by this field instead of tech_id
 async function loadCompanyData(companyId, myRole, myTechnicianId) {
     const isTech = myRole === 'technician';
     const tablesToLoad = isTech ? TABLES.filter(t => !ADMIN_ONLY_TABLES.includes(t) && t !== 'technicians') : TABLES;
@@ -17600,6 +17621,8 @@ async function loadCompanyData(companyId, myRole, myTechnicianId) {
         let ref = tableRef(companyId, t);
         if (isTech && TECH_SCOPED_TABLES.includes(t))
             ref = ref.where('tech_id', '==', myTechnicianId);
+        if (isTech && t === 'jobs')
+            ref = ref.where(JOB_SCOPE_FIELD, '==', myTechnicianId);
         return ref.get();
     }));
     const out = {};
@@ -17663,6 +17686,16 @@ async function nextQuotationNumber(companyId) {
         const cur = (snap.data().counters && snap.data().counters.quotation_seq) || 500;
         const next = cur + 1;
         tx.update(ref, { 'counters.quotation_seq': next });
+        return next;
+    });
+}
+async function nextJobNumber(companyId) {
+    return db.runTransaction(async (tx) => {
+        const ref = companyRef(companyId);
+        const snap = await tx.get(ref);
+        const cur = (snap.data().counters && snap.data().counters.job_seq) || 1;
+        const next = cur + 1;
+        tx.update(ref, { 'counters.job_seq': next });
         return next;
     });
 }
@@ -17751,11 +17784,11 @@ async function restoreBackupData(companyId, backupData, existingData) {
 async function createCompany(name, user) {
     const payload = {
         name, address: '', phone: '', gst: '', currency: '₹',
-        invoice_prefix: 'INV', quotation_prefix: 'QUO',
+        invoice_prefix: 'INV', quotation_prefix: 'QUO', job_prefix: 'JOB',
         default_terms: 'Goods once sold are not returnable. Warranty applicable only on parts, not on labour. Payment due within 7 days of invoice date.',
         gst_split_enabled: false, sgst_rate: 9, cgst_rate: 9,
-        bank_details: {}, upi_id: '', invoice_theme: 'classic', remarks_presets: [],
-        counters: { invoice_seq: 1000, quotation_seq: 500 },
+        bank_details: {}, upi_id: '', invoice_theme: 'classic', remarks_presets: [], inch_rates: [],
+        counters: { invoice_seq: 1000, quotation_seq: 500, job_seq: 1 },
         created_by: user.uid,
         created_at: new Date().toISOString(),
     };
@@ -18073,9 +18106,20 @@ function Dashboard({ data, company, setRoute, isTech, myTechnicianId }) {
 }
 function TechDashboard({ data, company, setRoute, myTechnicianId }) {
     const s = techStats(data, myTechnicianId);
+    const j = techJobStats(data, myTechnicianId);
     const stock = techStockList(data, myTechnicianId).filter(p => p.issued > 0);
     const recentInvoices = [...data.invoices].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
     return (React.createElement("div", null,
+        React.createElement("div", { className: "grid grid-3", style: { marginBottom: 16 } },
+            React.createElement("div", { className: "stat" },
+                React.createElement("div", { className: "label" }, "My Closed Jobs"),
+                React.createElement("div", { className: "value" }, j.closedJobs)),
+            React.createElement("div", { className: "stat" },
+                React.createElement("div", { className: "label" }, "My Total Earning"),
+                React.createElement("div", { className: "value teal" }, money(company, j.totalEarning))),
+            React.createElement("div", { className: "stat" },
+                React.createElement("div", { className: "label" }, "My Job Collection"),
+                React.createElement("div", { className: "value copper" }, money(company, j.totalJobCollection)))),
         React.createElement("div", { className: "grid grid-4", style: { marginBottom: 24 } },
             React.createElement("div", { className: "stat" },
                 React.createElement("div", { className: "label" }, "My Total Collection"),
@@ -18914,11 +18958,23 @@ function Technicians({ data, company, actions, isTech, myTechnicianId }) {
 }
 function TechProfile({ data, company, tech, onBack }) {
     const s = techStats(data, tech.id);
+    const j = techJobStats(data, tech.id);
     const stock = techStockList(data, tech.id).filter(p => p.issued > 0);
     return (React.createElement("div", null,
         onBack && React.createElement("button", { className: "btn btn-sm", onClick: onBack, style: { marginBottom: 16 } }, "\u2190 Back to Technicians"),
         React.createElement("h3", { style: { fontSize: 22, marginBottom: 2 } }, tech.name),
         React.createElement("div", { className: "muted", style: { marginBottom: 20 } }, tech.mobile),
+        React.createElement("div", { className: "section-title" }, "Job Performance"),
+        React.createElement("div", { className: "grid grid-3", style: { marginBottom: 22 } },
+            React.createElement("div", { className: "stat" },
+                React.createElement("div", { className: "label" }, "Total Closed Jobs"),
+                React.createElement("div", { className: "value" }, j.closedJobs)),
+            React.createElement("div", { className: "stat" },
+                React.createElement("div", { className: "label" }, "Total Earning"),
+                React.createElement("div", { className: "value teal" }, money(company, j.totalEarning))),
+            React.createElement("div", { className: "stat" },
+                React.createElement("div", { className: "label" }, "Job Collection Total"),
+                React.createElement("div", { className: "value copper" }, money(company, j.totalJobCollection)))),
         React.createElement("div", { className: "section-title" }, "Collection"),
         React.createElement("div", { className: "grid grid-4", style: { marginBottom: 22 } },
             React.createElement("div", { className: "stat" },
@@ -19835,9 +19891,12 @@ function Reports({ data, company }) {
         { id: 'quotation', label: 'Quotation Reports' },
         { id: 'techcol', label: 'Technician Collection' },
         { id: 'techstock', label: 'Technician Stock' },
+        { id: 'jobs', label: 'Job Reports' },
+        { id: 'master', label: 'Master Report' },
     ];
     const invRows = data.invoices.filter(i => inRange(i.date, from, to));
     const quoRows = data.quotations.filter(q => inRange(q.date, from, to));
+    const jobRows = (data.jobs || []).filter(j => !from && !to ? true : inRange((j.created_at || '').slice(0, 10), from, to));
     const colRows = data.collections.filter(c => {
         if (!inRange(c.date, from, to))
             return false;
@@ -19999,7 +20058,99 @@ function Reports({ data, company }) {
                                 React.createElement("td", { className: "num right" }, p.damaged),
                                 React.createElement("td", { className: "num right" }, p.returned),
                                 React.createElement("td", { className: "num right" }, p.current))))))))));
-            })))));
+            }))),
+        tab === 'jobs' && (React.createElement("div", null,
+            React.createElement("div", { className: "flex-between", style: { marginBottom: 12 } },
+                React.createElement("div", { className: "muted" },
+                    jobRows.length,
+                    " job",
+                    jobRows.length !== 1 ? 's' : '',
+                    " in range"),
+                React.createElement("button", { className: "btn btn-sm", onClick: () => csvDownload('job_report.csv', jobRows.map(j => {
+                        const t = data.technicians.find(x => x.id === j.assigned_tech_id);
+                        return { JobNo: j.job_no, Date: (j.created_at || '').slice(0, 10), Customer: j.customer_name, Mobile: j.customer_mobile,
+                            IMEI: j.imei, Inch: j.inch, AssignedTo: t ? t.name : '', Status: j.status, AmountCollected: j.amount_collected || 0,
+                            Invoice: j.invoice_number || '', TechEarning: j.tech_earning || 0 };
+                    })) }, "Download Excel (CSV)")),
+            React.createElement("div", { className: "table-wrap" },
+                React.createElement("table", null,
+                    React.createElement("thead", null,
+                        React.createElement("tr", null,
+                            React.createElement("th", null, "Job No."),
+                            React.createElement("th", null, "Date"),
+                            React.createElement("th", null, "Customer"),
+                            React.createElement("th", { className: "right" }, "Inch"),
+                            React.createElement("th", null, "Assigned"),
+                            React.createElement("th", null, "Status"),
+                            React.createElement("th", { className: "right" }, "Collected"),
+                            React.createElement("th", { className: "right" }, "Earning"))),
+                    React.createElement("tbody", null, jobRows.map(j => {
+                        const t = data.technicians.find(x => x.id === j.assigned_tech_id);
+                        return (React.createElement("tr", { key: j.id },
+                            React.createElement("td", { className: "num" }, j.job_no),
+                            React.createElement("td", null, dLabel((j.created_at || '').slice(0, 10))),
+                            React.createElement("td", null, j.customer_name),
+                            React.createElement("td", { className: "num right" }, j.inch || '—'),
+                            React.createElement("td", null, t ? t.name : '—'),
+                            React.createElement("td", null, jobStatusBadge(j.status)),
+                            React.createElement("td", { className: "num right" }, money(company, j.amount_collected || 0)),
+                            React.createElement("td", { className: "num right" }, money(company, j.tech_earning || 0))));
+                    })))))),
+        tab === 'master' && React.createElement(MasterReport, { data: data, company: company })));
+}
+function MasterReport({ data, company }) {
+    const downloadMaster = () => {
+        const sections = [];
+        const money2 = (n) => fmt(n);
+        const pushSection = (title, rows) => {
+            sections.push(`\n"${title}"`);
+            if (!rows || rows.length === 0) {
+                sections.push('"(no records)"');
+                return;
+            }
+            const headers = Object.keys(rows[0]);
+            const esc = (v) => `"${String(v === undefined || v === null ? '' : v).replace(/"/g, '""')}"`;
+            sections.push(headers.map(esc).join(','));
+            rows.forEach(r => sections.push(headers.map(h => esc(r[h])).join(',')));
+        };
+        pushSection('INVOICES', data.invoices.map(i => ({ Number: i.number, Date: i.date, Customer: i.customer_name, Mobile: i.customer_mobile,
+            Total: money2(i.total), PaymentType: i.payment_type, Paid: money2(i.payment_type === 'Full' ? i.total : i.advance_paid), Status: invoiceStatus(i) })));
+        pushSection('QUOTATIONS', data.quotations.map(q => ({ Number: q.number, Date: q.date, Customer: q.customer_name, Total: money2(q.total), Status: q.cancelled ? 'Cancelled' : 'Open' })));
+        pushSection('JOBS', data.jobs.map(j => {
+            const t = data.technicians.find(x => x.id === j.assigned_tech_id);
+            return { JobNo: j.job_no, Customer: j.customer_name, Mobile: j.customer_mobile, IMEI: j.imei, Inch: j.inch,
+                AssignedTo: t ? t.name : '', Status: j.status, Collected: money2(j.amount_collected || 0), Invoice: j.invoice_number || '', Earning: money2(j.tech_earning || 0) };
+        }));
+        pushSection('TECHNICIANS', data.technicians.filter(t => t.active !== false).map(t => {
+            const s = techStats(data, t.id);
+            const j = techJobStats(data, t.id);
+            return { Name: t.name, Mobile: t.mobile, TotalCollection: money2(s.totalCollected), TotalDeposited: money2(s.totalDeposited),
+                CashWithTech: money2(s.cashWithTech), Due: money2(s.totalDue), ClosedJobs: j.closedJobs, TotalEarning: money2(j.totalEarning) };
+        }));
+        pushSection('COLLECTIONS', data.collections.map(c => {
+            const t = data.technicians.find(x => x.id === c.tech_id);
+            return { Date: c.date, Technician: t ? t.name : '', Mode: c.mode, Amount: money2(c.amount), Ref: c.ref || '' };
+        }));
+        pushSection('DEPOSITS', data.deposits.map(d => {
+            const t = data.technicians.find(x => x.id === d.tech_id);
+            return { Date: d.date, Technician: t ? t.name : '', Mode: d.mode, Amount: money2(d.amount), Ref: d.ref || '' };
+        }));
+        const office = officeCashLedger(data);
+        pushSection('OFFICE CASH', office.entries.map(e => ({ Date: e.date, Name: e.name, Type: e.type === 'in' ? 'Cash In' : 'Cash Out', Amount: money2(e.amount), Remarks: e.remarks || '' })));
+        pushSection('MAIN STOCK', data.main_stock.map(p => ({ Part: p.part_name, Code: p.part_code, Qty: p.qty })));
+        pushSection('CATALOG', data.catalog.map(c => ({ Name: c.name, Rate: money2(c.rate) })));
+        const blob = new Blob([sections.join('\n')], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `master-report-${company.name.replace(/[^a-z0-9]+/gi, '-')}-${todayISO()}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+    return (React.createElement("div", { className: "card", style: { maxWidth: 680 } },
+        React.createElement("div", { className: "section-title" }, "Master Report \u2014 Everything in One File"),
+        React.createElement("div", { className: "muted", style: { fontSize: 13.5, marginBottom: 18 } }, "Downloads one Excel-friendly CSV with every register \u2014 invoices, quotations, jobs, technicians, collections, deposits, office cash, main stock and catalog \u2014 each as its own clearly labelled section."),
+        React.createElement("button", { className: "btn btn-primary", onClick: downloadMaster }, "\u2B07 Download Master Report")));
 }
 /* ---------- Activity Log ---------- */
 function Activity({ data }) {
@@ -20179,6 +20330,7 @@ function Settings({ data, company, actions, companies, user, onSwitchCompany, on
         React.createElement(RemarksPresetsSettings, { company: company, actions: actions }),
         React.createElement(CatalogSettings, { data: data, company: company, actions: actions }),
         React.createElement(TeamSettings, { company: company, data: data, actions: actions, user: user }),
+        React.createElement(InchRateSettings, { company: company, actions: actions }),
         React.createElement(BackupSettings, { company: company, data: data, actions: actions, user: user }),
         React.createElement(AccountSettings, { user: user })));
 }
@@ -20544,6 +20696,407 @@ function BackupSettings({ company, data, actions, user }) {
             React.createElement("button", { className: "btn", onClick: () => fileInputRef.current && fileInputRef.current.click(), disabled: restoring }, restoring ? 'Restoring…' : '⬆ Restore from Backup'),
             React.createElement("input", { ref: fileInputRef, type: "file", accept: "application/json,.json", style: { display: 'none' }, onChange: handleFile }))));
 }
+function InchRateSettings({ company, actions }) {
+    const [rates, setRates] = useState(company.inch_rates || []);
+    const [inch, setInch] = useState('');
+    const [amount, setAmount] = useState('');
+    const [saving, setSaving] = useState(false);
+    const persist = async (next) => {
+        setSaving(true);
+        try {
+            await actions.setCompanyField({ inch_rates: next }, 'Inch Rate Table Updated', '');
+            setRates(next);
+        }
+        finally {
+            setSaving(false);
+        }
+    };
+    const add = () => {
+        if (!inch || Number(inch) <= 0) {
+            alert("Enter a valid inch size.");
+            return;
+        }
+        if (amount === '' || Number(amount) < 0) {
+            alert("Enter a valid amount.");
+            return;
+        }
+        const next = [...rates.filter(r => Number(r.inch) !== Number(inch)), { inch: Number(inch), amount: Number(amount) }]
+            .sort((a, b) => a.inch - b.inch);
+        persist(next);
+        setInch('');
+        setAmount('');
+    };
+    const remove = (inchVal) => persist(rates.filter(r => Number(r.inch) !== Number(inchVal)));
+    return (React.createElement("div", { className: "card", style: { maxWidth: 680, marginBottom: 20 } },
+        React.createElement("div", { className: "section-title" }, "Technician Earning \u2014 TV Inch Rate Table"),
+        React.createElement("div", { className: "muted", style: { fontSize: 13, marginBottom: 14 } }, "When a technician closes a job, they earn the amount set here for that TV's inch size. Add a rate for every inch size you commonly service."),
+        rates.length === 0 ? (React.createElement("div", { className: "muted", style: { fontSize: 13.5, marginBottom: 14 } }, "No rates set yet \u2014 technicians will earn \u20B90 until you add some.")) : (React.createElement("div", { className: "table-wrap", style: { marginBottom: 14 } },
+            React.createElement("table", null,
+                React.createElement("thead", null,
+                    React.createElement("tr", null,
+                        React.createElement("th", null, "Inch"),
+                        React.createElement("th", { className: "right" }, "Amount"),
+                        React.createElement("th", null))),
+                React.createElement("tbody", null, rates.map(r => (React.createElement("tr", { key: r.inch },
+                    React.createElement("td", { className: "num" },
+                        r.inch,
+                        "\""),
+                    React.createElement("td", { className: "num right" }, money(company, r.amount)),
+                    React.createElement("td", null,
+                        React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => remove(r.inch), disabled: saving }, "Remove"))))))))),
+        React.createElement("div", { className: "flex gap-8", style: { alignItems: 'flex-end', flexWrap: 'wrap' } },
+            React.createElement("div", { className: "field", style: { marginBottom: 0, width: 120 } },
+                React.createElement("label", null, "Inch"),
+                React.createElement("input", { type: "number", min: "1", value: inch, onChange: e => setInch(e.target.value) })),
+            React.createElement("div", { className: "field", style: { marginBottom: 0, width: 140 } },
+                React.createElement("label", null, "Amount"),
+                React.createElement("input", { type: "number", min: "0", value: amount, onChange: e => setAmount(e.target.value) })),
+            React.createElement("button", { className: "btn btn-primary btn-sm", onClick: add, disabled: saving }, "+ Add / Update"))));
+}
+/* ---------- Job Register ---------- */
+function Jobs({ data, company, actions, role, isAdminOrSub, isTech, myTechnicianId, user }) {
+    const [showForm, setShowForm] = useState(false);
+    const [viewingId, setViewingId] = useState(null);
+    const [filter, setFilter] = useState('All');
+    const [search, setSearch] = useState('');
+    const jobs = data.jobs || [];
+    const filtered = jobs.filter(j => {
+        if (filter !== 'All' && j.status !== filter)
+            return false;
+        if (search.trim()) {
+            const q = search.trim().toLowerCase();
+            const hay = [j.job_no, j.customer_name, j.customer_mobile, j.alt_mobile, j.imei].filter(Boolean).join(' ').toLowerCase();
+            if (!hay.includes(q))
+                return false;
+        }
+        return true;
+    }).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    const viewing = viewingId ? jobs.find(j => j.id === viewingId) : null;
+    return (React.createElement("div", null,
+        React.createElement("div", { className: "flex-between", style: { marginBottom: 16, flexWrap: 'wrap', gap: 10 } },
+            React.createElement("div", { className: "pill-filter" }, ['All', ...JOB_STATUSES].map(f => (React.createElement("button", { key: f, className: filter === f ? 'active' : '', onClick: () => setFilter(f) }, f)))),
+            isAdminOrSub && React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ New Job")),
+        isAdminOrSub && (React.createElement("div", { className: "field", style: { maxWidth: 360 } },
+            React.createElement("input", { type: "text", value: search, onChange: e => setSearch(e.target.value), placeholder: "Search job no., name, mobile, IMEI\u2026" }))),
+        filtered.length === 0 ? (React.createElement("div", { className: "card empty" },
+            React.createElement("h4", null, "No jobs found"),
+            React.createElement("div", null, isAdminOrSub ? 'Create a new job to get started.' : 'No jobs assigned to you yet.'))) : (React.createElement("div", { className: "table-wrap" },
+            React.createElement("table", null,
+                React.createElement("thead", null,
+                    React.createElement("tr", null,
+                        React.createElement("th", null, "Job No."),
+                        React.createElement("th", null, "Customer"),
+                        React.createElement("th", null, "IMEI"),
+                        React.createElement("th", { className: "right" }, "Inch"),
+                        React.createElement("th", null, "Assigned To"),
+                        React.createElement("th", null, "Status"),
+                        React.createElement("th", null))),
+                React.createElement("tbody", null, filtered.map(j => {
+                    const tech = data.technicians.find(t => t.id === j.assigned_tech_id);
+                    return (React.createElement("tr", { key: j.id },
+                        React.createElement("td", { className: "num" }, j.job_no),
+                        React.createElement("td", null,
+                            j.customer_name,
+                            React.createElement("div", { className: "muted", style: { fontSize: 12 } }, j.customer_mobile)),
+                        React.createElement("td", { className: "num" }, j.imei || '—'),
+                        React.createElement("td", { className: "num right" }, j.inch || '—'),
+                        React.createElement("td", null, tech ? tech.name : '—'),
+                        React.createElement("td", null, jobStatusBadge(j.status)),
+                        React.createElement("td", null,
+                            React.createElement("button", { className: "btn btn-sm", onClick: () => setViewingId(j.id) }, "View"))));
+                }))))),
+        showForm && React.createElement(JobForm, { data: data, company: company, actions: actions, user: user, onClose: () => setShowForm(false) }),
+        viewing && React.createElement(JobDetail, { data: data, company: company, actions: actions, job: viewing, isAdminOrSub: isAdminOrSub, isTech: isTech, myTechnicianId: myTechnicianId, user: user, onClose: () => setViewingId(null) })));
+}
+function JobForm({ data, company, actions, user, onClose }) {
+    const [customerName, setCustomerName] = useState('');
+    const [customerMobile, setCustomerMobile] = useState('');
+    const [altMobile, setAltMobile] = useState('');
+    const [address, setAddress] = useState('');
+    const [imei, setImei] = useState('');
+    const [inch, setInch] = useState('');
+    const [saving, setSaving] = useState(false);
+    const save = async () => {
+        if (!customerName.trim()) {
+            alert("Customer name is required.");
+            return;
+        }
+        setSaving(true);
+        try {
+            const seq = await nextJobNumber(company.id);
+            const num = (company.job_prefix || 'JOB') + '-' + seq;
+            await actions.create('jobs', {
+                job_no: num, customer_name: customerName, customer_mobile: customerMobile, alt_mobile: altMobile,
+                address, imei, inch: inch ? Number(inch) : null, status: 'Created', assigned_tech_id: null,
+                amount_collected: 0, payment_mode: '', parts_used: [], invoice_id: null, invoice_number: null, tech_earning: 0,
+            }, 'Job Created', `${num} — ${customerName}`);
+            actions.notify("Job created");
+            onClose();
+        }
+        catch (err) { }
+        finally {
+            setSaving(false);
+        }
+    };
+    return (React.createElement("div", { className: "modal-overlay", onClick: e => { if (e.target === e.currentTarget)
+            onClose(); } },
+        React.createElement("div", { className: "modal" },
+            React.createElement("div", { className: "modal-head" },
+                React.createElement("h3", null, "New Job"),
+                React.createElement("button", { className: "modal-close", onClick: onClose }, "\u2715")),
+            React.createElement("div", { className: "grid grid-2" },
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Customer name"),
+                    React.createElement("input", { type: "text", value: customerName, onChange: e => setCustomerName(e.target.value), autoFocus: true })),
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Mobile"),
+                    React.createElement("input", { type: "tel", value: customerMobile, onChange: e => setCustomerMobile(e.target.value) }))),
+            React.createElement("div", { className: "grid grid-2" },
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Alternative no."),
+                    React.createElement("input", { type: "tel", value: altMobile, onChange: e => setAltMobile(e.target.value) })),
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "IMEI no."),
+                    React.createElement("input", { type: "text", value: imei, onChange: e => setImei(e.target.value) }))),
+            React.createElement("div", { className: "field" },
+                React.createElement("label", null, "Address"),
+                React.createElement("input", { type: "text", value: address, onChange: e => setAddress(e.target.value) })),
+            React.createElement("div", { className: "field", style: { maxWidth: 200 } },
+                React.createElement("label", null, "Inch (TV size)"),
+                React.createElement("input", { type: "number", min: "0", value: inch, onChange: e => setInch(e.target.value) })),
+            React.createElement("div", { className: "flex gap-10", style: { justifyContent: 'flex-end' } },
+                React.createElement("button", { className: "btn", onClick: onClose }, "Cancel"),
+                React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : 'Create Job')))));
+}
+function JobDetail({ data, company, actions, job, isAdminOrSub, isTech, myTechnicianId, user, onClose }) {
+    var _a;
+    const [showAssign, setShowAssign] = useState(false);
+    const [showClose, setShowClose] = useState(false);
+    const activeTechs = data.technicians.filter(t => t.active !== false);
+    const assignedTech = data.technicians.find(t => t.id === job.assigned_tech_id);
+    const isMyJob = isTech && job.assigned_tech_id === myTechnicianId;
+    const canAct = isAdminOrSub || isMyJob;
+    const [pickTech, setPickTech] = useState(job.assigned_tech_id || ((_a = activeTechs[0]) === null || _a === void 0 ? void 0 : _a.id) || '');
+    const [assigning, setAssigning] = useState(false);
+    const assign = async () => {
+        if (!pickTech) {
+            alert("Select a technician.");
+            return;
+        }
+        setAssigning(true);
+        try {
+            const tech = data.technicians.find(t => t.id === pickTech);
+            await actions.updateDocWithHistory('jobs', job.id, { assigned_tech_id: pickTech, status: 'Assigned' }, 'Job Assigned', `${job.job_no} → ${tech ? tech.name : pickTech}`);
+            actions.notify("Job assigned");
+            setShowAssign(false);
+        }
+        finally {
+            setAssigning(false);
+        }
+    };
+    const [confirming, setConfirming] = useState(false);
+    const confirmJob = async () => {
+        setConfirming(true);
+        try {
+            await actions.updateDocWithHistory('jobs', job.id, { status: 'Confirmed' }, 'Job Confirmed', `${job.job_no} confirmed by ${user.email}`);
+            actions.notify("Job confirmed");
+        }
+        finally {
+            setConfirming(false);
+        }
+    };
+    return (React.createElement("div", { className: "modal-overlay", onClick: e => { if (e.target === e.currentTarget)
+            onClose(); } },
+        React.createElement("div", { className: "modal wide" },
+            React.createElement("div", { className: "modal-head" },
+                React.createElement("div", null,
+                    React.createElement("h3", null,
+                        "Job ",
+                        job.job_no),
+                    React.createElement("div", { className: "muted", style: { fontSize: 13, marginTop: 2 } }, jobStatusBadge(job.status))),
+                React.createElement("button", { className: "modal-close", onClick: onClose }, "\u2715")),
+            React.createElement("div", { className: "grid grid-2" },
+                React.createElement("div", null,
+                    React.createElement("div", { className: "label", style: { fontSize: 11, color: 'var(--text-mute)', marginBottom: 2 } }, "Customer"),
+                    React.createElement("div", { style: { fontWeight: 600 } }, job.customer_name),
+                    React.createElement("div", { className: "muted", style: { fontSize: 13 } },
+                        job.customer_mobile,
+                        job.alt_mobile ? ' / ' + job.alt_mobile : ''),
+                    React.createElement("div", { className: "muted", style: { fontSize: 13 } }, job.address)),
+                React.createElement("div", null,
+                    React.createElement("div", { className: "label", style: { fontSize: 11, color: 'var(--text-mute)', marginBottom: 2 } }, "Device"),
+                    React.createElement("div", null,
+                        "IMEI: ",
+                        React.createElement("span", { className: "num" }, job.imei || '—')),
+                    React.createElement("div", null,
+                        "Inch: ",
+                        React.createElement("span", { className: "num" }, job.inch || '—')),
+                    React.createElement("div", { style: { marginTop: 8 } },
+                        "Assigned to: ",
+                        React.createElement("b", null, assignedTech ? assignedTech.name : 'Not assigned')))),
+            job.status === 'Closed' && (React.createElement("div", { className: "card", style: { marginTop: 16, background: 'var(--green-soft)', border: '1px solid var(--green)' } },
+                React.createElement("div", { className: "flex-between" },
+                    React.createElement("span", null, "Amount collected"),
+                    React.createElement("span", { className: "num", style: { fontWeight: 600 } }, money(company, job.amount_collected))),
+                React.createElement("div", { className: "flex-between", style: { marginTop: 6 } },
+                    React.createElement("span", null, "Payment mode"),
+                    React.createElement("span", null, job.payment_mode)),
+                React.createElement("div", { className: "flex-between", style: { marginTop: 6 } },
+                    React.createElement("span", null, "Invoice"),
+                    React.createElement("span", { className: "num" }, job.invoice_number || '—')),
+                React.createElement("div", { className: "flex-between", style: { marginTop: 6 } },
+                    React.createElement("span", null, "Technician earning"),
+                    React.createElement("span", { className: "num", style: { fontWeight: 600, color: 'var(--teal)' } }, money(company, job.tech_earning))),
+                job.parts_used && job.parts_used.length > 0 && (React.createElement("div", { style: { marginTop: 10 } },
+                    React.createElement("div", { className: "muted", style: { fontSize: 12, marginBottom: 4 } }, "Parts used"),
+                    job.parts_used.map((p, i) => (React.createElement("div", { key: i, style: { fontSize: 13 } },
+                        p.part_name,
+                        " \u00D7 ",
+                        p.qty))))))),
+            React.createElement("div", { className: "divider" }),
+            canAct && job.status === 'Created' && isAdminOrSub && (showAssign ? (React.createElement("div", { className: "flex gap-10", style: { alignItems: 'flex-end', flexWrap: 'wrap' } },
+                React.createElement("div", { className: "field", style: { marginBottom: 0, minWidth: 200 } },
+                    React.createElement("label", null, "Assign to"),
+                    React.createElement("select", { value: pickTech, onChange: e => setPickTech(e.target.value) }, activeTechs.map(t => React.createElement("option", { key: t.id, value: t.id }, t.name)))),
+                React.createElement("button", { className: "btn btn-primary", onClick: assign, disabled: assigning }, assigning ? 'Assigning…' : 'Confirm Assignment'),
+                React.createElement("button", { className: "btn", onClick: () => setShowAssign(false) }, "Cancel"))) : React.createElement("button", { className: "btn btn-primary", onClick: () => setShowAssign(true) }, "Assign to Technician")),
+            job.status === 'Assigned' && (isAdminOrSub || isMyJob) && (React.createElement("button", { className: "btn btn-primary", onClick: confirmJob, disabled: confirming }, confirming ? 'Confirming…' : '✓ Confirm Job')),
+            job.status === 'Confirmed' && (isAdminOrSub || isMyJob) && (React.createElement("button", { className: "btn btn-teal", onClick: () => setShowClose(true) }, "Complete & Close Job")),
+            React.createElement("div", { className: "divider" }),
+            React.createElement("div", { className: "section-title" }, "Job History"),
+            (!job.history || job.history.length === 0) ? React.createElement("div", { className: "muted", style: { fontSize: 13 } }, "No history yet.") : (React.createElement("div", { className: "table-wrap" },
+                React.createElement("table", null,
+                    React.createElement("thead", null,
+                        React.createElement("tr", null,
+                            React.createElement("th", null, "Time"),
+                            React.createElement("th", null, "Action"),
+                            React.createElement("th", null, "Details"),
+                            React.createElement("th", null, "By"))),
+                    React.createElement("tbody", null, [...job.history].reverse().map((h, idx) => (React.createElement("tr", { key: idx },
+                        React.createElement("td", { className: "num", style: { whiteSpace: 'nowrap' } }, dtLabel(h.ts)),
+                        React.createElement("td", null, h.action),
+                        React.createElement("td", null, h.details || '—'),
+                        React.createElement("td", null, h.user_email || '—')))))))),
+            React.createElement("div", { className: "flex gap-10", style: { marginTop: 20, justifyContent: 'flex-end' } },
+                React.createElement("button", { className: "btn", onClick: onClose }, "Close"))),
+        showClose && React.createElement(CloseJobForm, { data: data, company: company, actions: actions, job: job, onClose: () => setShowClose(false), onDone: onClose })));
+}
+function CloseJobForm({ data, company, actions, job, onClose, onDone }) {
+    const [parts, setParts] = useState([]);
+    const [partId, setPartId] = useState('');
+    const [partQty, setPartQty] = useState(1);
+    const [amount, setAmount] = useState('');
+    const [mode, setMode] = useState('Cash');
+    const [saving, setSaving] = useState(false);
+    const techStock = techStockList(data, job.assigned_tech_id).filter(p => p.current > 0);
+    const addPart = () => {
+        const p = techStock.find(x => x.partName === partId);
+        if (!p) {
+            alert("Select a part.");
+            return;
+        }
+        if (Number(partQty) > p.current) {
+            alert(`Only ${p.current} available with this technician.`);
+            return;
+        }
+        setParts([...parts, { part_name: p.partName, part_code: p.partCode, qty: Number(partQty) }]);
+        setPartId('');
+        setPartQty(1);
+    };
+    const removePart = (idx) => setParts(parts.filter((_, i) => i !== idx));
+    const close = async () => {
+        if (!amount || Number(amount) < 0) {
+            alert("Enter the amount collected (0 is fine if nothing was collected).");
+            return;
+        }
+        setSaving(true);
+        try {
+            // 1) record stock usage for each consumed part
+            for (const p of parts) {
+                await actions.create('stock_usage', {
+                    tech_id: job.assigned_tech_id, customer: job.customer_name, job_ref: job.job_no,
+                    part_name: p.part_name, part_code: p.part_code, qty: p.qty, type: 'used', remarks: 'Job closure', date: todayISO(),
+                }, 'Stock Used', `${p.qty} x ${p.part_name} — Job ${job.job_no}`);
+            }
+            // 2) record the collection
+            if (Number(amount) > 0) {
+                await actions.create('collections', {
+                    tech_id: job.assigned_tech_id, amount: Number(amount), mode, date: todayISO(), ref: job.job_no, remarks: 'Job closure collection',
+                }, 'Collection Recorded', `Job ${job.job_no} — ${mode} — ${money(company, amount)}`);
+            }
+            // 3) auto-generate the invoice
+            const seq = await nextInvoiceNumber(company.id);
+            const num = (company.invoice_prefix || 'INV') + '-' + seq;
+            const lineLabel = `TV Repair Service${job.inch ? ' - ' + job.inch + '"' : ''} (Job ${job.job_no})`;
+            const invoiceRow = await actions.create('invoices', {
+                number: num, date: todayISO(), customer_name: job.customer_name, customer_mobile: job.customer_mobile,
+                customer_address: job.address, items: [{ id: uid('li'), name: lineLabel, qty: 1, rate: Number(amount) }],
+                discount: 0, tax: 0, gst_split: false, sgst_amt: 0, cgst_amt: 0,
+                sub: Number(amount), disc_amt: 0, tax_amt: 0, total: Number(amount),
+                payment_type: 'Full', advance_paid: Number(amount), cancelled: false,
+                service_order_no: job.job_no, imei: job.imei, remarks: `Auto-generated on closing Job ${job.job_no}`, theme: company.invoice_theme || 'classic',
+            }, 'Invoice Created', `${num} — ${job.customer_name} — ${money(company, amount)}`);
+            // 4) close the job with earning + link to invoice
+            const earning = inchEarning(company, job.inch);
+            await actions.updateDocWithHistory('jobs', job.id, {
+                status: 'Closed', closed_at: new Date().toISOString(), amount_collected: Number(amount), payment_mode: mode,
+                parts_used: parts, invoice_id: invoiceRow.id, invoice_number: invoiceRow.number, tech_earning: earning,
+            }, 'Job Closed', `${job.job_no} — Invoice ${invoiceRow.number} — earning ${money(company, earning)}`);
+            actions.notify(`Job closed — Invoice ${invoiceRow.number} generated`);
+            onClose();
+            onDone();
+        }
+        catch (err) {
+            alert("Couldn't close the job: " + err.message);
+        }
+        finally {
+            setSaving(false);
+        }
+    };
+    return (React.createElement("div", { className: "modal-overlay", onClick: e => { if (e.target === e.currentTarget)
+            onClose(); } },
+        React.createElement("div", { className: "modal" },
+            React.createElement("div", { className: "modal-head" },
+                React.createElement("h3", null,
+                    "Complete & Close Job ",
+                    job.job_no),
+                React.createElement("button", { className: "modal-close", onClick: onClose }, "\u2715")),
+            React.createElement("div", { className: "section-title" }, "Parts Used (optional)"),
+            parts.length > 0 && (React.createElement("div", { style: { marginBottom: 10 } }, parts.map((p, i) => (React.createElement("div", { key: i, className: "flex-between", style: { padding: '6px 0', borderBottom: '1px solid var(--line-soft)' } },
+                React.createElement("span", { style: { fontSize: 13.5 } },
+                    p.part_name,
+                    " \u00D7 ",
+                    p.qty),
+                React.createElement("button", { className: "btn btn-ghost btn-sm btn-danger", onClick: () => removePart(i) }, "\u2715")))))),
+            techStock.length === 0 ? React.createElement("div", { className: "muted", style: { fontSize: 13, marginBottom: 10 } }, "No stock currently held by this technician.") : (React.createElement("div", { className: "flex gap-8", style: { marginBottom: 14, alignItems: 'flex-end', flexWrap: 'wrap' } },
+                React.createElement("div", { className: "field", style: { marginBottom: 0 } },
+                    React.createElement("label", null, "Part"),
+                    React.createElement("select", { value: partId, onChange: e => setPartId(e.target.value) },
+                        React.createElement("option", { value: "" }, "Select part"),
+                        techStock.map((p, idx) => React.createElement("option", { key: idx, value: p.partName },
+                            p.partName,
+                            " (",
+                            p.current,
+                            " available)")))),
+                React.createElement("div", { className: "field", style: { marginBottom: 0, width: 90 } },
+                    React.createElement("label", null, "Qty"),
+                    React.createElement("input", { type: "number", min: "1", value: partQty, onChange: e => setPartQty(e.target.value) })),
+                React.createElement("button", { className: "btn btn-sm", onClick: addPart }, "+ Add"))),
+            React.createElement("div", { className: "divider" }),
+            React.createElement("div", { className: "grid grid-2" },
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Amount collected"),
+                    React.createElement("input", { type: "number", min: "0", value: amount, onChange: e => setAmount(e.target.value), autoFocus: true })),
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Payment mode"),
+                    React.createElement("select", { value: mode, onChange: e => setMode(e.target.value) },
+                        React.createElement("option", { value: "Cash" }, "Cash"),
+                        React.createElement("option", { value: "Online" }, "Online")))),
+            React.createElement("div", { className: "muted", style: { fontSize: 12.5, marginBottom: 14 } }, "This will record the parts used, log the collection, auto-generate a full-payment invoice for the customer, and close the job."),
+            React.createElement("div", { className: "flex gap-10", style: { justifyContent: 'flex-end' } },
+                React.createElement("button", { className: "btn", onClick: onClose }, "Cancel"),
+                React.createElement("button", { className: "btn btn-primary", onClick: close, disabled: saving }, saving ? 'Closing…' : 'Close Job & Generate Invoice')))));
+}
 /* ============================================================
    Root App
    ============================================================ */
@@ -20646,8 +21199,8 @@ function App() {
         create: async (table, payload, actionLabel, details) => {
             try {
                 let finalPayload = payload;
-                if (table === 'invoices' || table === 'quotations') {
-                    const entry = { ts: new Date().toISOString(), action: actionLabel || 'Created', details: (payload.number || '') + ' created', user_email: user.email };
+                if (table === 'invoices' || table === 'quotations' || table === 'jobs') {
+                    const entry = { ts: new Date().toISOString(), action: actionLabel || 'Created', details: (payload.number || payload.job_no || '') + ' created', user_email: user.email };
                     finalPayload = { ...payload, history: [entry] };
                 }
                 const row = await dbInsert(company.id, table, finalPayload);
@@ -20773,6 +21326,7 @@ function App() {
         { id: 'dashboard', label: 'Dashboard', icon: '◆', show: true },
         { id: 'invoices', label: 'Invoices', icon: '▤', show: true },
         { id: 'quotations', label: 'Quotations', icon: '▥', show: true },
+        { id: 'jobs', label: isTech ? 'My Jobs' : 'Job Register', icon: '🛠', show: true },
         { id: 'technicians', label: isTech ? 'My Profile' : 'Technicians', icon: '☺', show: true },
         { id: 'collection', label: isTech ? 'My Collection' : 'Technician Collection', icon: '⌗', show: true },
         { id: 'deposit', label: isTech ? 'My Deposits' : 'Technician Deposit', icon: '⇩', show: true },
@@ -20791,6 +21345,7 @@ function App() {
         dashboard: ['Dashboard', 'Overview of billing, collection and stock'],
         invoices: ['Invoices', 'Create and track tax invoices'],
         quotations: ['Quotations', 'Draft and send price quotations'],
+        jobs: [isTech ? 'My Jobs' : 'Job Register', isTech ? 'Jobs assigned to you' : 'Register, assign and track repair jobs end to end'],
         technicians: [isTech ? 'My Profile' : 'Technicians', isTech ? 'Your collection and stock summary' : 'Team roster and individual summaries'],
         collection: [isTech ? 'My Collection' : 'Technician Collection', isTech ? 'Cash and online amounts you have collected' : 'Cash and online collection by technician'],
         deposit: [isTech ? 'My Deposits' : 'Technician Deposit', isTech ? 'Deposits you have made against your collection' : 'Record deposits made against collected cash'],
@@ -20809,6 +21364,8 @@ function App() {
         body = React.createElement(Invoices, { ...common });
     else if (route === 'quotations')
         body = React.createElement(Quotations, { ...common });
+    else if (route === 'jobs')
+        body = React.createElement(Jobs, { ...common, user: user });
     else if (route === 'technicians')
         body = React.createElement(Technicians, { ...common });
     else if (route === 'collection')
