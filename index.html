@@ -17611,8 +17611,8 @@ const TABLES = ['technicians', 'invoices', 'quotations', 'collections', 'deposit
     'main_stock', 'stock_issues', 'stock_usage', 'stock_returns', 'catalog', 'main_stock_adjustments', 'jobs'];
 const companyRef = (companyId) => db.collection('companies').doc(companyId);
 const tableRef = (companyId, table) => companyRef(companyId).collection(table);
-const ADMIN_ONLY_TABLES = ['office_cash', 'main_stock', 'main_stock_adjustments', 'catalog', 'stock_issues'];
-const TECH_SCOPED_TABLES = ['collections', 'deposits', 'stock_usage', 'stock_returns'];
+const ADMIN_ONLY_TABLES = ['office_cash', 'main_stock', 'main_stock_adjustments', 'catalog'];
+const TECH_SCOPED_TABLES = ['collections', 'deposits', 'stock_usage', 'stock_returns', 'stock_issues'];
 const JOB_SCOPE_FIELD = 'assigned_tech_id'; // 'jobs' is scoped by this field instead of tech_id
 async function loadCompanyData(companyId, myRole, myTechnicianId) {
     const isTech = myRole === 'technician';
