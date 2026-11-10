@@ -228,6 +228,7 @@
 <body>
 <div id="root"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 (function(){
 var __cjsModules={}, __cjsCache={};
@@ -17548,11 +17549,105 @@ function invoiceStatus(inv) {
         return 'Advance / Partial';
     return 'Due';
 }
-function inchEarning(company, inch) {
+function inchEarning(company, inch, jobType, techId) {
     const rates = company.inch_rates || [];
-    const match = rates.find(r => Number(r.inch) === Number(inch));
+    let match = rates.find(r => Number(r.inch) === Number(inch) && r.job_type === jobType && r.tech_id === techId);
+    if (match)
+        return Number(match.amount);
+    match = rates.find(r => Number(r.inch) === Number(inch) && r.job_type === jobType && !r.tech_id);
+    if (match)
+        return Number(match.amount);
+    match = rates.find(r => Number(r.inch) === Number(inch) && !r.job_type && !r.tech_id);
     return match ? Number(match.amount) : 0;
 }
+function generateJobNo(existingJobs) {
+    for (let attempt = 0; attempt < 20; attempt++) {
+        const rand6 = Math.floor(100000 + Math.random() * 900000);
+        const candidate = 'TSC' + rand6;
+        if (!existingJobs.some(j => j.job_no === candidate))
+            return candidate;
+    }
+    return 'TSC' + Date.now().toString().slice(-6);
+}
+const JOB_TYPES = ['Repair', 'Installation'];
+
+function InchRateSettings({ company, actions, data }) {
+    const [rates, setRates] = useState(company.inch_rates || []);
+    const [jobType, setJobType] = useState('Repair');
+    const [techId, setTechId] = useState('');
+    const [inch, setInch] = useState('');
+    const [amount, setAmount] = useState('');
+    const [saving, setSaving] = useState(false);
+    const activeTechs = (data.technicians || []).filter(t => t.active !== false);
+    const persist = async (next) => {
+        setSaving(true);
+        try {
+            await actions.setCompanyField({ inch_rates: next }, 'Earning Rate Table Updated', '');
+            setRates(next);
+        }
+        finally {
+            setSaving(false);
+        }
+    };
+    const add = () => {
+        if (!inch || Number(inch) <= 0) {
+            alert("Enter a valid inch size.");
+            return;
+        }
+        if (amount === '' || Number(amount) < 0) {
+            alert("Enter a valid amount.");
+            return;
+        }
+        const techVal = techId || null;
+        const next = [...rates.filter(r => !(Number(r.inch) === Number(inch) && r.job_type === jobType && (r.tech_id || null) === techVal)),
+            { inch: Number(inch), job_type: jobType, tech_id: techVal, amount: Number(amount) }]
+            .sort((a, b) => a.job_type === b.job_type ? a.inch - b.inch : (a.job_type < b.job_type ? -1 : 1));
+        persist(next);
+        setInch('');
+        setAmount('');
+    };
+    const remove = (r) => persist(rates.filter(x => x !== r));
+    const techName = (id) => id ? ((activeTechs.find(t => t.id === id) || {}).name || 'Unknown') : 'All technicians (default)';
+    return (React.createElement("div", { className: "card", style: { maxWidth: 680, marginBottom: 20 } },
+        React.createElement("div", { className: "section-title" }, "Technician Earning \u2014 Repair & Installation Rate Table"),
+        React.createElement("div", { className: "muted", style: { fontSize: 13, marginBottom: 14 } }, "Set how much a technician earns per job, by job type and TV inch size. Optionally set a special rate for one specific technician \u2014 otherwise the \"All technicians\" rate applies to everyone."),
+        rates.length === 0 ? (React.createElement("div", { className: "muted", style: { fontSize: 13.5, marginBottom: 14 } }, "No rates set yet \u2014 technicians will earn \u20B90 until you add some.")) : (React.createElement("div", { className: "table-wrap", style: { marginBottom: 14 } },
+            React.createElement("table", null,
+                React.createElement("thead", null,
+                    React.createElement("tr", null,
+                        React.createElement("th", null, "Job Type"),
+                        React.createElement("th", null, "Technician"),
+                        React.createElement("th", { className: "right" }, "Inch"),
+                        React.createElement("th", { className: "right" }, "Amount"),
+                        React.createElement("th", null))),
+                React.createElement("tbody", null, rates.map((r, i) => (React.createElement("tr", { key: i },
+                    React.createElement("td", null, r.job_type || 'Repair'),
+                    React.createElement("td", null, techName(r.tech_id)),
+                    React.createElement("td", { className: "num right" },
+                        r.inch,
+                        "\""),
+                    React.createElement("td", { className: "num right" }, money(company, r.amount)),
+                    React.createElement("td", null,
+                        React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => remove(r), disabled: saving }, "Remove"))))))))),
+        React.createElement("div", { className: "grid grid-2" },
+            React.createElement("div", { className: "field" },
+                React.createElement("label", null, "Job Type"),
+                React.createElement("select", { value: jobType, onChange: e => setJobType(e.target.value) }, JOB_TYPES.map(t => React.createElement("option", { key: t, value: t }, t)))),
+            React.createElement("div", { className: "field" },
+                React.createElement("label", null, "Technician (optional)"),
+                React.createElement("select", { value: techId, onChange: e => setTechId(e.target.value) },
+                    React.createElement("option", { value: "" }, "All technicians (default)"),
+                    activeTechs.map(t => React.createElement("option", { key: t.id, value: t.id }, t.name))))),
+        React.createElement("div", { className: "flex gap-8", style: { alignItems: 'flex-end', flexWrap: 'wrap' } },
+            React.createElement("div", { className: "field", style: { marginBottom: 0, width: 120 } },
+                React.createElement("label", null, "Inch"),
+                React.createElement("input", { type: "number", min: "1", value: inch, onChange: e => setInch(e.target.value) })),
+            React.createElement("div", { className: "field", style: { marginBottom: 0, width: 140 } },
+                React.createElement("label", null, "Amount"),
+                React.createElement("input", { type: "number", min: "0", value: amount, onChange: e => setAmount(e.target.value) })),
+            React.createElement("button", { className: "btn btn-primary btn-sm", onClick: add, disabled: saving }, "+ Add / Update"))));
+}
+
 function techJobStats(dt, techId) {
     const jobs = (dt.jobs || []).filter(j => j.assigned_tech_id === techId);
     const closed = jobs.filter(j => j.status === 'Closed');
@@ -17608,11 +17703,11 @@ const initFirebase = (cfg) => {
     return { auth, db };
 };
 const TABLES = ['technicians', 'invoices', 'quotations', 'collections', 'deposits', 'office_cash',
-    'main_stock', 'stock_issues', 'stock_usage', 'stock_returns', 'catalog', 'main_stock_adjustments', 'jobs'];
+    'main_stock', 'stock_issues', 'stock_usage', 'stock_returns', 'catalog', 'main_stock_adjustments', 'jobs', 'payouts', 'attendance'];
 const companyRef = (companyId) => db.collection('companies').doc(companyId);
 const tableRef = (companyId, table) => companyRef(companyId).collection(table);
 const ADMIN_ONLY_TABLES = ['office_cash', 'main_stock', 'main_stock_adjustments', 'catalog'];
-const TECH_SCOPED_TABLES = ['collections', 'deposits', 'stock_usage', 'stock_returns', 'stock_issues'];
+const TECH_SCOPED_TABLES = ['collections', 'deposits', 'stock_usage', 'stock_returns', 'stock_issues', 'payouts', 'attendance'];
 const JOB_SCOPE_FIELD = 'assigned_tech_id'; // 'jobs' is scoped by this field instead of tech_id
 async function loadCompanyData(companyId, myRole, myTechnicianId) {
     const isTech = myRole === 'technician';
@@ -17738,6 +17833,8 @@ function recordSignature(rec) {
 // are strong natural identities; everything else falls back to a full
 // content signature (safe for re-importing the exact same backup twice).
 function dedupeKey(table, rec) {
+    if (table === 'attendance')
+        return 'att:' + rec.tech_id + '|' + rec.date;
     if (table === 'invoices' || table === 'quotations')
         return 'num:' + rec.number;
     if (table === 'technicians')
@@ -18709,6 +18806,10 @@ function DocFullPage({ type, doc, company, actions, isAdminOrSub, onClose }) {
     };
     const [waBusy, setWaBusy] = useState(false);
     const printOrSavePdf = () => { window.print(); };
+    const downloadPdf = () => {
+        actions.notify('In the print window, choose "Save as PDF" as the destination');
+        setTimeout(() => window.print(), 500);
+    };
     const shareOnWhatsApp = async () => {
         const text = buildShareText(doc, company, isInvoice);
         setWaBusy(true);
@@ -18737,8 +18838,8 @@ function DocFullPage({ type, doc, company, actions, isAdminOrSub, onClose }) {
                 isAdminOrSub && React.createElement("button", { className: "btn", onClick: () => setChangingTheme(v => !v) }, "\uD83C\uDFA8 Change Theme"),
                 isAdminOrSub && isInvoice && due > 0 && !doc.cancelled && React.createElement("button", { className: "btn btn-teal", onClick: markFullyPaid, disabled: settling }, settling ? 'Saving…' : '✓ Mark Full Payment'),
                 React.createElement("button", { className: "btn", style: { background: '#25D366', borderColor: '#25D366', color: '#fff' }, onClick: shareOnWhatsApp, disabled: waBusy }, waBusy ? 'Preparing…' : '💬 Share on WhatsApp'),
-                React.createElement("button", { className: "btn", onClick: printOrSavePdf }, "\uD83D\uDDA8 Print / Save as PDF"),
-                React.createElement("button", { className: "btn btn-primary", onClick: wordExport }, "\uD83D\uDCC4 Download Word"))),
+                React.createElement("button", { className: "btn", onClick: printOrSavePdf }, "\uD83D\uDDA8 Print"),
+                React.createElement("button", { className: "btn btn-primary", onClick: downloadPdf }, "\u2B07 Download PDF"))),
         changingTheme && (React.createElement("div", { style: { background: 'var(--paper-card)', borderBottom: '1px solid var(--line)', padding: '12px 24px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
             React.createElement("select", { value: themePick, onChange: e => setThemePick(e.target.value), style: { width: 220 } }, THEMES.map(t => React.createElement("option", { key: t.id, value: t.id }, t.label))),
             React.createElement("button", { className: "btn btn-primary btn-sm", onClick: saveTheme, disabled: savingTheme }, savingTheme ? 'Saving…' : 'Save Theme'))),
@@ -20098,60 +20199,7 @@ function Reports({ data, company }) {
                     })))))),
         tab === 'master' && React.createElement(MasterReport, { data: data, company: company })));
 }
-function MasterReport({ data, company }) {
-    const downloadMaster = () => {
-        const sections = [];
-        const money2 = (n) => fmt(n);
-        const pushSection = (title, rows) => {
-            sections.push(`\n"${title}"`);
-            if (!rows || rows.length === 0) {
-                sections.push('"(no records)"');
-                return;
-            }
-            const headers = Object.keys(rows[0]);
-            const esc = (v) => `"${String(v === undefined || v === null ? '' : v).replace(/"/g, '""')}"`;
-            sections.push(headers.map(esc).join(','));
-            rows.forEach(r => sections.push(headers.map(h => esc(r[h])).join(',')));
-        };
-        pushSection('INVOICES', data.invoices.map(i => ({ Number: i.number, Date: i.date, Customer: i.customer_name, Mobile: i.customer_mobile,
-            Total: money2(i.total), PaymentType: i.payment_type, Paid: money2(i.payment_type === 'Full' ? i.total : i.advance_paid), Status: invoiceStatus(i) })));
-        pushSection('QUOTATIONS', data.quotations.map(q => ({ Number: q.number, Date: q.date, Customer: q.customer_name, Total: money2(q.total), Status: q.cancelled ? 'Cancelled' : 'Open' })));
-        pushSection('JOBS', data.jobs.map(j => {
-            const t = data.technicians.find(x => x.id === j.assigned_tech_id);
-            return { JobNo: j.job_no, Customer: j.customer_name, Mobile: j.customer_mobile, IMEI: j.imei, Inch: j.inch,
-                AssignedTo: t ? t.name : '', Status: j.status, Collected: money2(j.amount_collected || 0), Invoice: j.invoice_number || '', Earning: money2(j.tech_earning || 0) };
-        }));
-        pushSection('TECHNICIANS', data.technicians.filter(t => t.active !== false).map(t => {
-            const s = techStats(data, t.id);
-            const j = techJobStats(data, t.id);
-            return { Name: t.name, Mobile: t.mobile, TotalCollection: money2(s.totalCollected), TotalDeposited: money2(s.totalDeposited),
-                CashWithTech: money2(s.cashWithTech), Due: money2(s.totalDue), ClosedJobs: j.closedJobs, TotalEarning: money2(j.totalEarning) };
-        }));
-        pushSection('COLLECTIONS', data.collections.map(c => {
-            const t = data.technicians.find(x => x.id === c.tech_id);
-            return { Date: c.date, Technician: t ? t.name : '', Mode: c.mode, Amount: money2(c.amount), Ref: c.ref || '' };
-        }));
-        pushSection('DEPOSITS', data.deposits.map(d => {
-            const t = data.technicians.find(x => x.id === d.tech_id);
-            return { Date: d.date, Technician: t ? t.name : '', Mode: d.mode, Amount: money2(d.amount), Ref: d.ref || '' };
-        }));
-        const office = officeCashLedger(data);
-        pushSection('OFFICE CASH', office.entries.map(e => ({ Date: e.date, Name: e.name, Type: e.type === 'in' ? 'Cash In' : 'Cash Out', Amount: money2(e.amount), Remarks: e.remarks || '' })));
-        pushSection('MAIN STOCK', data.main_stock.map(p => ({ Part: p.part_name, Code: p.part_code, Qty: p.qty })));
-        pushSection('CATALOG', data.catalog.map(c => ({ Name: c.name, Rate: money2(c.rate) })));
-        const blob = new Blob([sections.join('\n')], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `master-report-${company.name.replace(/[^a-z0-9]+/gi, '-')}-${todayISO()}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
-    };
-    return (React.createElement("div", { className: "card", style: { maxWidth: 680 } },
-        React.createElement("div", { className: "section-title" }, "Master Report \u2014 Everything in One File"),
-        React.createElement("div", { className: "muted", style: { fontSize: 13.5, marginBottom: 18 } }, "Downloads one Excel-friendly CSV with every register \u2014 invoices, quotations, jobs, technicians, collections, deposits, office cash, main stock and catalog \u2014 each as its own clearly labelled section."),
-        React.createElement("button", { className: "btn btn-primary", onClick: downloadMaster }, "\u2B07 Download Master Report")));
-}
+
 /* ---------- Activity Log ---------- */
 function Activity({ data }) {
     const log = data.activity_log || [];
@@ -20330,7 +20378,7 @@ function Settings({ data, company, actions, companies, user, onSwitchCompany, on
         React.createElement(RemarksPresetsSettings, { company: company, actions: actions }),
         React.createElement(CatalogSettings, { data: data, company: company, actions: actions }),
         React.createElement(TeamSettings, { company: company, data: data, actions: actions, user: user }),
-        React.createElement(InchRateSettings, { company: company, actions: actions }),
+        React.createElement(InchRateSettings, { company: company, actions: actions, data: data }),
         React.createElement(BackupSettings, { company: company, data: data, actions: actions, user: user }),
         React.createElement(AccountSettings, { user: user })));
 }
@@ -20696,72 +20744,19 @@ function BackupSettings({ company, data, actions, user }) {
             React.createElement("button", { className: "btn", onClick: () => fileInputRef.current && fileInputRef.current.click(), disabled: restoring }, restoring ? 'Restoring…' : '⬆ Restore from Backup'),
             React.createElement("input", { ref: fileInputRef, type: "file", accept: "application/json,.json", style: { display: 'none' }, onChange: handleFile }))));
 }
-function InchRateSettings({ company, actions }) {
-    const [rates, setRates] = useState(company.inch_rates || []);
-    const [inch, setInch] = useState('');
-    const [amount, setAmount] = useState('');
-    const [saving, setSaving] = useState(false);
-    const persist = async (next) => {
-        setSaving(true);
-        try {
-            await actions.setCompanyField({ inch_rates: next }, 'Inch Rate Table Updated', '');
-            setRates(next);
-        }
-        finally {
-            setSaving(false);
-        }
-    };
-    const add = () => {
-        if (!inch || Number(inch) <= 0) {
-            alert("Enter a valid inch size.");
-            return;
-        }
-        if (amount === '' || Number(amount) < 0) {
-            alert("Enter a valid amount.");
-            return;
-        }
-        const next = [...rates.filter(r => Number(r.inch) !== Number(inch)), { inch: Number(inch), amount: Number(amount) }]
-            .sort((a, b) => a.inch - b.inch);
-        persist(next);
-        setInch('');
-        setAmount('');
-    };
-    const remove = (inchVal) => persist(rates.filter(r => Number(r.inch) !== Number(inchVal)));
-    return (React.createElement("div", { className: "card", style: { maxWidth: 680, marginBottom: 20 } },
-        React.createElement("div", { className: "section-title" }, "Technician Earning \u2014 TV Inch Rate Table"),
-        React.createElement("div", { className: "muted", style: { fontSize: 13, marginBottom: 14 } }, "When a technician closes a job, they earn the amount set here for that TV's inch size. Add a rate for every inch size you commonly service."),
-        rates.length === 0 ? (React.createElement("div", { className: "muted", style: { fontSize: 13.5, marginBottom: 14 } }, "No rates set yet \u2014 technicians will earn \u20B90 until you add some.")) : (React.createElement("div", { className: "table-wrap", style: { marginBottom: 14 } },
-            React.createElement("table", null,
-                React.createElement("thead", null,
-                    React.createElement("tr", null,
-                        React.createElement("th", null, "Inch"),
-                        React.createElement("th", { className: "right" }, "Amount"),
-                        React.createElement("th", null))),
-                React.createElement("tbody", null, rates.map(r => (React.createElement("tr", { key: r.inch },
-                    React.createElement("td", { className: "num" },
-                        r.inch,
-                        "\""),
-                    React.createElement("td", { className: "num right" }, money(company, r.amount)),
-                    React.createElement("td", null,
-                        React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => remove(r.inch), disabled: saving }, "Remove"))))))))),
-        React.createElement("div", { className: "flex gap-8", style: { alignItems: 'flex-end', flexWrap: 'wrap' } },
-            React.createElement("div", { className: "field", style: { marginBottom: 0, width: 120 } },
-                React.createElement("label", null, "Inch"),
-                React.createElement("input", { type: "number", min: "1", value: inch, onChange: e => setInch(e.target.value) })),
-            React.createElement("div", { className: "field", style: { marginBottom: 0, width: 140 } },
-                React.createElement("label", null, "Amount"),
-                React.createElement("input", { type: "number", min: "0", value: amount, onChange: e => setAmount(e.target.value) })),
-            React.createElement("button", { className: "btn btn-primary btn-sm", onClick: add, disabled: saving }, "+ Add / Update"))));
-}
+
 /* ---------- Job Register ---------- */
 function Jobs({ data, company, actions, role, isAdminOrSub, isTech, myTechnicianId, user }) {
     const [showForm, setShowForm] = useState(false);
     const [viewingId, setViewingId] = useState(null);
     const [filter, setFilter] = useState('All');
+    const [typeFilter, setTypeFilter] = useState('All');
     const [search, setSearch] = useState('');
     const jobs = data.jobs || [];
     const filtered = jobs.filter(j => {
         if (filter !== 'All' && j.status !== filter)
+            return false;
+        if (typeFilter !== 'All' && j.type !== typeFilter)
             return false;
         if (search.trim()) {
             const q = search.trim().toLowerCase();
@@ -20776,6 +20771,7 @@ function Jobs({ data, company, actions, role, isAdminOrSub, isTech, myTechnician
         React.createElement("div", { className: "flex-between", style: { marginBottom: 16, flexWrap: 'wrap', gap: 10 } },
             React.createElement("div", { className: "pill-filter" }, ['All', ...JOB_STATUSES].map(f => (React.createElement("button", { key: f, className: filter === f ? 'active' : '', onClick: () => setFilter(f) }, f)))),
             isAdminOrSub && React.createElement("button", { className: "btn btn-primary", onClick: () => setShowForm(true) }, "+ New Job")),
+        React.createElement("div", { className: "pill-filter", style: { marginBottom: 16 } }, ['All', ...JOB_TYPES].map(f => (React.createElement("button", { key: f, className: typeFilter === f ? 'active' : '', onClick: () => setTypeFilter(f) }, f)))),
         isAdminOrSub && (React.createElement("div", { className: "field", style: { maxWidth: 360 } },
             React.createElement("input", { type: "text", value: search, onChange: e => setSearch(e.target.value), placeholder: "Search job no., name, mobile, IMEI\u2026" }))),
         filtered.length === 0 ? (React.createElement("div", { className: "card empty" },
@@ -20785,6 +20781,7 @@ function Jobs({ data, company, actions, role, isAdminOrSub, isTech, myTechnician
                 React.createElement("thead", null,
                     React.createElement("tr", null,
                         React.createElement("th", null, "Job No."),
+                        React.createElement("th", null, "Type"),
                         React.createElement("th", null, "Customer"),
                         React.createElement("th", null, "IMEI"),
                         React.createElement("th", { className: "right" }, "Inch"),
@@ -20795,6 +20792,7 @@ function Jobs({ data, company, actions, role, isAdminOrSub, isTech, myTechnician
                     const tech = data.technicians.find(t => t.id === j.assigned_tech_id);
                     return (React.createElement("tr", { key: j.id },
                         React.createElement("td", { className: "num" }, j.job_no),
+                        React.createElement("td", null, j.type || 'Repair'),
                         React.createElement("td", null,
                             j.customer_name,
                             React.createElement("div", { className: "muted", style: { fontSize: 12 } }, j.customer_mobile)),
@@ -20809,6 +20807,8 @@ function Jobs({ data, company, actions, role, isAdminOrSub, isTech, myTechnician
         viewing && React.createElement(JobDetail, { data: data, company: company, actions: actions, job: viewing, isAdminOrSub: isAdminOrSub, isTech: isTech, myTechnicianId: myTechnicianId, user: user, onClose: () => setViewingId(null) })));
 }
 function JobForm({ data, company, actions, user, onClose }) {
+    const [jobNo, setJobNo] = useState('');
+    const [jobType, setJobType] = useState('Repair');
     const [customerName, setCustomerName] = useState('');
     const [customerMobile, setCustomerMobile] = useState('');
     const [altMobile, setAltMobile] = useState('');
@@ -20823,10 +20823,9 @@ function JobForm({ data, company, actions, user, onClose }) {
         }
         setSaving(true);
         try {
-            const seq = await nextJobNumber(company.id);
-            const num = (company.job_prefix || 'JOB') + '-' + seq;
+            const num = jobNo.trim() ? jobNo.trim() : generateJobNo(data.jobs || []);
             await actions.create('jobs', {
-                job_no: num, customer_name: customerName, customer_mobile: customerMobile, alt_mobile: altMobile,
+                job_no: num, type: jobType, customer_name: customerName, customer_mobile: customerMobile, alt_mobile: altMobile,
                 address, imei, inch: inch ? Number(inch) : null, status: 'Created', assigned_tech_id: null,
                 amount_collected: 0, payment_mode: '', parts_used: [], invoice_id: null, invoice_number: null, tech_earning: 0,
             }, 'Job Created', `${num} — ${customerName}`);
@@ -20844,6 +20843,13 @@ function JobForm({ data, company, actions, user, onClose }) {
             React.createElement("div", { className: "modal-head" },
                 React.createElement("h3", null, "New Job"),
                 React.createElement("button", { className: "modal-close", onClick: onClose }, "\u2715")),
+            React.createElement("div", { className: "grid grid-2" },
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Job No. (optional)"),
+                    React.createElement("input", { type: "text", value: jobNo, onChange: e => setJobNo(e.target.value), placeholder: "Leave blank to auto-generate" })),
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Job Type"),
+                    React.createElement("select", { value: jobType, onChange: e => setJobType(e.target.value) }, JOB_TYPES.map(t => React.createElement("option", { key: t, value: t }, t))))),
             React.createElement("div", { className: "grid grid-2" },
                 React.createElement("div", { className: "field" },
                     React.createElement("label", null, "Customer name"),
@@ -20925,6 +20931,9 @@ function JobDetail({ data, company, actions, job, isAdminOrSub, isTech, myTechni
                     React.createElement("div", { className: "muted", style: { fontSize: 13 } }, job.address)),
                 React.createElement("div", null,
                     React.createElement("div", { className: "label", style: { fontSize: 11, color: 'var(--text-mute)', marginBottom: 2 } }, "Device"),
+                    React.createElement("div", null,
+                        "Type: ",
+                        React.createElement("b", null, job.type || 'Repair')),
                     React.createElement("div", null,
                         "IMEI: ",
                         React.createElement("span", { className: "num" }, job.imei || '—')),
@@ -21037,7 +21046,7 @@ function CloseJobForm({ data, company, actions, job, onClose, onDone }) {
                 service_order_no: job.job_no, imei: job.imei, remarks: `Auto-generated on closing Job ${job.job_no}`, theme: company.invoice_theme || 'classic',
             }, 'Invoice Created', `${num} — ${job.customer_name} — ${money(company, amount)}`);
             // 4) close the job with earning + link to invoice
-            const earning = inchEarning(company, job.inch);
+            const earning = inchEarning(company, job.inch, job.type, job.assigned_tech_id);
             await actions.updateDocWithHistory('jobs', job.id, {
                 status: 'Closed', closed_at: new Date().toISOString(), amount_collected: Number(amount), payment_mode: mode,
                 parts_used: parts, invoice_id: invoiceRow.id, invoice_number: invoiceRow.number, tech_earning: earning,
@@ -21330,6 +21339,8 @@ function App() {
         { id: 'technicians', label: isTech ? 'My Profile' : 'Technicians', icon: '☺', show: true },
         { id: 'collection', label: isTech ? 'My Collection' : 'Technician Collection', icon: '⌗', show: true },
         { id: 'deposit', label: isTech ? 'My Deposits' : 'Technician Deposit', icon: '⇩', show: true },
+        { id: 'payouts', label: isTech ? 'My Earnings' : 'Earnings & Payouts', icon: '₹', show: true },
+        { id: 'attendance', label: isTech ? 'My Attendance' : 'Attendance', icon: '✔', show: true },
         { id: 'officecash', label: 'Office Cash', icon: '₹', show: isAdminOrSub },
         { id: 'stock', label: isTech ? 'My Parts Stock' : 'Technician Parts Stock', icon: '⚙', show: true },
         { id: 'reports', label: 'Reports', icon: '▦', show: isAdminOrSub },
@@ -21353,6 +21364,8 @@ function App() {
         stock: [isTech ? 'My Parts Stock' : 'Technician Parts Stock', isTech ? 'Parts issued to you, used and returned' : 'Issue, use and return spare parts'],
         reports: ['Reports', 'Filtered exports across every register'],
         activity: ['Activity', 'Every login, addition and deletion, logged'],
+        payouts: [isTech ? 'My Earnings' : 'Earnings & Payouts', isTech ? 'Your job earnings, withdrawals and balance' : 'Technician earnings, payouts and withdrawal requests'],
+        attendance: [isTech ? 'My Attendance' : 'Attendance', isTech ? 'Check in and view your attendance' : 'Mark and review technician attendance'],
         settings: ['Settings', 'Company details, themes, GST, team and more'],
     };
     const go = (r) => { setRoute(r); setSidebarOpen(false); };
@@ -21372,6 +21385,10 @@ function App() {
         body = React.createElement(Collection, { ...common });
     else if (route === 'deposit')
         body = React.createElement(Deposit, { ...common });
+    else if (route === 'payouts')
+        body = React.createElement(Payouts, { ...common, user: user });
+    else if (route === 'attendance')
+        body = React.createElement(Attendance, { ...common, user: user });
     else if (route === 'officecash' && isAdminOrSub)
         body = React.createElement(OfficeCash, { ...common });
     else if (route === 'stock')
@@ -21407,6 +21424,479 @@ function App() {
             React.createElement("div", { className: "content" }, body)),
         toast && React.createElement("div", { style: { position: 'fixed', bottom: 24, right: 28, background: 'var(--ink)', color: '#fff', padding: '12px 18px', borderRadius: 8, fontSize: 13.5, zIndex: 100, boxShadow: '0 6px 24px rgba(0,0,0,0.2)', maxWidth: 'calc(100vw - 40px)' } }, toast)));
 }
+function techEarningBalance(dt, techId) {
+    const j = techJobStats(dt, techId);
+    const pays = (dt.payouts || []).filter(p => p.tech_id === techId);
+    const paid = pays.filter(p => p.status === 'Paid').reduce((s, p) => s + Number(p.amount || 0), 0);
+    const pending = pays.filter(p => p.status === 'Requested').reduce((s, p) => s + Number(p.amount || 0), 0);
+    return { totalEarning: j.totalEarning, closedJobs: j.closedJobs, paid, pending, balance: j.totalEarning - paid, available: j.totalEarning - paid - pending };
+}
+function payoutBadge(status) {
+    const map = { 'Paid': 'badge-green', 'Requested': 'badge-amber', 'Rejected': 'badge-red' };
+    return React.createElement("span", { className: "badge " + (map[status] || 'badge-teal') }, status);
+}
+function Payouts({ data, company, actions, isAdminOrSub, isTech, myTechnicianId, user }) {
+    const [showPay, setShowPay] = useState(false);
+    const [showRequest, setShowRequest] = useState(false);
+    const [approving, setApproving] = useState(null);
+    const techs = data.technicians.filter(t => t.active !== false);
+    const payouts = [...(data.payouts || [])].sort((a, b) => (b.created_at || b.date || '').localeCompare(a.created_at || a.date || ''));
+    const pending = payouts.filter(p => p.status === 'Requested');
+    const reject = async (p) => {
+        if (!confirm("Reject this withdrawal request?"))
+            return;
+        await actions.update('payouts', p.id, { status: 'Rejected', handled_by: user.email }, 'Withdrawal Rejected', `${money(company, p.amount)}`);
+    };
+    if (isTech) {
+        const b = techEarningBalance(data, myTechnicianId);
+        return (React.createElement("div", null,
+            React.createElement("div", { className: "grid grid-4", style: { marginBottom: 16 } },
+                React.createElement("div", { className: "stat" },
+                    React.createElement("div", { className: "label" }, "Total Earning"),
+                    React.createElement("div", { className: "value teal" }, money(company, b.totalEarning))),
+                React.createElement("div", { className: "stat" },
+                    React.createElement("div", { className: "label" }, "Paid Out"),
+                    React.createElement("div", { className: "value" }, money(company, b.paid))),
+                React.createElement("div", { className: "stat" },
+                    React.createElement("div", { className: "label" }, "Pending Request"),
+                    React.createElement("div", { className: "value amber" }, money(company, b.pending))),
+                React.createElement("div", { className: "stat" },
+                    React.createElement("div", { className: "label" }, "Available to Withdraw"),
+                    React.createElement("div", { className: "value copper" }, money(company, b.available)))),
+            React.createElement("div", { className: "flex-between", style: { marginBottom: 12 } },
+                React.createElement("div", { className: "section-title", style: { marginBottom: 0 } }, "My Withdrawals"),
+                React.createElement("button", { className: "btn btn-primary", onClick: () => setShowRequest(true), disabled: b.available <= 0 }, "+ Request Withdrawal")),
+            React.createElement(PayoutHistory, { payouts: payouts, data: data, company: company, showTech: false }),
+            showRequest && React.createElement(WithdrawRequestForm, { company: company, actions: actions, techId: myTechnicianId, available: b.available, user: user, onClose: () => setShowRequest(false) })));
+    }
+    return (React.createElement("div", null,
+        React.createElement("div", { className: "flex-between", style: { marginBottom: 16, flexWrap: 'wrap', gap: 10 } },
+            React.createElement("div", { className: "muted" }, "Technician earnings come from closed jobs. Record payouts, or approve withdrawal requests."),
+            React.createElement("button", { className: "btn btn-primary", onClick: () => setShowPay(true) }, "+ Record Payout")),
+        React.createElement("div", { className: "table-wrap", style: { marginBottom: 24 } },
+            React.createElement("table", null,
+                React.createElement("thead", null,
+                    React.createElement("tr", null,
+                        React.createElement("th", null, "Technician"),
+                        React.createElement("th", { className: "right" }, "Closed Jobs"),
+                        React.createElement("th", { className: "right" }, "Total Earning"),
+                        React.createElement("th", { className: "right" }, "Paid Out"),
+                        React.createElement("th", { className: "right" }, "Pending Request"),
+                        React.createElement("th", { className: "right" }, "Balance"))),
+                React.createElement("tbody", null, techs.map(t => {
+                    const b = techEarningBalance(data, t.id);
+                    return (React.createElement("tr", { key: t.id },
+                        React.createElement("td", null, t.name),
+                        React.createElement("td", { className: "num right" }, b.closedJobs),
+                        React.createElement("td", { className: "num right" }, money(company, b.totalEarning)),
+                        React.createElement("td", { className: "num right" }, money(company, b.paid)),
+                        React.createElement("td", { className: "num right" }, money(company, b.pending)),
+                        React.createElement("td", { className: "num right", style: { fontWeight: 600, color: b.balance > 0 ? 'var(--red)' : 'var(--green)' } }, money(company, b.balance))));
+                })))),
+        pending.length > 0 && (React.createElement("div", { style: { marginBottom: 24 } },
+            React.createElement("div", { className: "section-title" }, "Pending Withdrawal Requests"),
+            React.createElement("div", { className: "table-wrap" },
+                React.createElement("table", null,
+                    React.createElement("thead", null,
+                        React.createElement("tr", null,
+                            React.createElement("th", null, "Date"),
+                            React.createElement("th", null, "Technician"),
+                            React.createElement("th", { className: "right" }, "Amount"),
+                            React.createElement("th", null, "Remarks"),
+                            React.createElement("th", null))),
+                    React.createElement("tbody", null, pending.map(p => {
+                        const t = data.technicians.find(x => x.id === p.tech_id);
+                        return (React.createElement("tr", { key: p.id },
+                            React.createElement("td", null, dLabel(p.date)),
+                            React.createElement("td", null, t ? t.name : '—'),
+                            React.createElement("td", { className: "num right" }, money(company, p.amount)),
+                            React.createElement("td", null, p.remarks || '—'),
+                            React.createElement("td", null,
+                                React.createElement("div", { className: "flex gap-8" },
+                                    React.createElement("button", { className: "btn btn-sm btn-teal", onClick: () => setApproving(p) }, "Approve & Pay"),
+                                    React.createElement("button", { className: "btn btn-sm btn-danger", onClick: () => reject(p) }, "Reject")))));
+                    })))))),
+        React.createElement("div", { className: "section-title" }, "Payout History"),
+        React.createElement(PayoutHistory, { payouts: payouts, data: data, company: company, showTech: true }),
+        showPay && React.createElement(PayoutForm, { data: data, company: company, actions: actions, user: user, onClose: () => setShowPay(false) }),
+        approving && React.createElement(ApprovePayoutForm, { company: company, actions: actions, user: user, request: approving, techName: (data.technicians.find(x => x.id === approving.tech_id) || {}).name, onClose: () => setApproving(null) })));
+}
+function PayoutHistory({ payouts, data, company, showTech }) {
+    if (payouts.length === 0)
+        return React.createElement("div", { className: "card empty" },
+            React.createElement("h4", null, "No payouts yet"));
+    return (React.createElement("div", { className: "table-wrap" },
+        React.createElement("table", null,
+            React.createElement("thead", null,
+                React.createElement("tr", null,
+                    React.createElement("th", null, "Date"),
+                    showTech && React.createElement("th", null, "Technician"),
+                    React.createElement("th", null, "Status"),
+                    React.createElement("th", null, "Mode"),
+                    React.createElement("th", { className: "right" }, "Amount"),
+                    React.createElement("th", null, "Remarks"))),
+            React.createElement("tbody", null, payouts.map(p => {
+                const t = data.technicians.find(x => x.id === p.tech_id);
+                return (React.createElement("tr", { key: p.id },
+                    React.createElement("td", null, dLabel(p.paid_date || p.date)),
+                    showTech && React.createElement("td", null, t ? t.name : '—'),
+                    React.createElement("td", null, payoutBadge(p.status)),
+                    React.createElement("td", null, p.mode || '—'),
+                    React.createElement("td", { className: "num right" }, money(company, p.amount)),
+                    React.createElement("td", null, p.remarks || '—')));
+            })))));
+}
+function PayoutForm({ data, company, actions, user, onClose }) {
+    var _a;
+    const techs = data.technicians.filter(t => t.active !== false);
+    const [techId, setTechId] = useState(((_a = techs[0]) === null || _a === void 0 ? void 0 : _a.id) || '');
+    const [amount, setAmount] = useState('');
+    const [mode, setMode] = useState('Cash');
+    const [date, setDate] = useState(todayISO());
+    const [remarks, setRemarks] = useState('');
+    const [saving, setSaving] = useState(false);
+    const b = techId ? techEarningBalance(data, techId) : null;
+    const save = async () => {
+        if (!techId) {
+            alert("Select a technician.");
+            return;
+        }
+        if (!amount || Number(amount) <= 0) {
+            alert("Enter a valid amount.");
+            return;
+        }
+        if (b && Number(amount) > b.balance) {
+            if (!confirm(`This is more than the technician's unpaid balance (${money(company, b.balance)}). Pay anyway?`))
+                return;
+        }
+        setSaving(true);
+        try {
+            const t = techs.find(x => x.id === techId);
+            await actions.create('payouts', { tech_id: techId, amount: Number(amount), mode, date, paid_date: date, remarks, status: 'Paid', paid_by: user.email }, 'Payout Recorded', `${t ? t.name : ''} — ${money(company, amount)} (${mode})`);
+            actions.notify("Payout recorded");
+            onClose();
+        }
+        catch (err) { }
+        finally {
+            setSaving(false);
+        }
+    };
+    return (React.createElement("div", { className: "modal-overlay", onClick: e => { if (e.target === e.currentTarget)
+            onClose(); } },
+        React.createElement("div", { className: "modal" },
+            React.createElement("div", { className: "modal-head" },
+                React.createElement("h3", null, "Record Payout"),
+                React.createElement("button", { className: "modal-close", onClick: onClose }, "\u2715")),
+            React.createElement("div", { className: "field" },
+                React.createElement("label", null, "Technician"),
+                React.createElement("select", { value: techId, onChange: e => setTechId(e.target.value) }, techs.map(t => React.createElement("option", { key: t.id, value: t.id }, t.name)))),
+            b && React.createElement("div", { className: "muted", style: { fontSize: 13, marginBottom: 12 } },
+                "Unpaid balance: ",
+                React.createElement("b", null, money(company, b.balance))),
+            React.createElement("div", { className: "grid grid-2" },
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Amount"),
+                    React.createElement("input", { type: "number", min: "0", value: amount, onChange: e => setAmount(e.target.value) })),
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Payment mode"),
+                    React.createElement("select", { value: mode, onChange: e => setMode(e.target.value) },
+                        React.createElement("option", { value: "Cash" }, "Cash"),
+                        React.createElement("option", { value: "Online" }, "Online")))),
+            React.createElement("div", { className: "field" },
+                React.createElement("label", null, "Date"),
+                React.createElement("input", { type: "date", value: date, onChange: e => setDate(e.target.value) })),
+            React.createElement("div", { className: "field" },
+                React.createElement("label", null, "Remarks"),
+                React.createElement("input", { type: "text", value: remarks, onChange: e => setRemarks(e.target.value) })),
+            React.createElement("div", { className: "flex gap-10", style: { justifyContent: 'flex-end' } },
+                React.createElement("button", { className: "btn", onClick: onClose }, "Cancel"),
+                React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : 'Record Payout')))));
+}
+function ApprovePayoutForm({ company, actions, user, request, techName, onClose }) {
+    const [mode, setMode] = useState('Cash');
+    const [date, setDate] = useState(todayISO());
+    const [saving, setSaving] = useState(false);
+    const save = async () => {
+        setSaving(true);
+        try {
+            await actions.update('payouts', request.id, { status: 'Paid', mode, paid_date: date, paid_by: user.email }, 'Withdrawal Paid', `${techName || ''} — ${money(company, request.amount)} (${mode})`);
+            actions.notify("Marked as paid");
+            onClose();
+        }
+        catch (err) { }
+        finally {
+            setSaving(false);
+        }
+    };
+    return (React.createElement("div", { className: "modal-overlay", onClick: e => { if (e.target === e.currentTarget)
+            onClose(); } },
+        React.createElement("div", { className: "modal" },
+            React.createElement("div", { className: "modal-head" },
+                React.createElement("h3", null, "Approve & Pay"),
+                React.createElement("button", { className: "modal-close", onClick: onClose }, "\u2715")),
+            React.createElement("div", { style: { marginBottom: 14 } },
+                techName,
+                " requested ",
+                React.createElement("b", null, money(company, request.amount))),
+            React.createElement("div", { className: "grid grid-2" },
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Payment mode"),
+                    React.createElement("select", { value: mode, onChange: e => setMode(e.target.value) },
+                        React.createElement("option", { value: "Cash" }, "Cash"),
+                        React.createElement("option", { value: "Online" }, "Online"))),
+                React.createElement("div", { className: "field" },
+                    React.createElement("label", null, "Paid on"),
+                    React.createElement("input", { type: "date", value: date, onChange: e => setDate(e.target.value) }))),
+            React.createElement("div", { className: "flex gap-10", style: { justifyContent: 'flex-end' } },
+                React.createElement("button", { className: "btn", onClick: onClose }, "Cancel"),
+                React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : 'Confirm Payment')))));
+}
+function WithdrawRequestForm({ company, actions, techId, available, user, onClose }) {
+    const [amount, setAmount] = useState('');
+    const [remarks, setRemarks] = useState('');
+    const [saving, setSaving] = useState(false);
+    const save = async () => {
+        if (!amount || Number(amount) <= 0) {
+            alert("Enter a valid amount.");
+            return;
+        }
+        if (Number(amount) > available) {
+            alert(`You can withdraw at most ${money(company, available)}.`);
+            return;
+        }
+        setSaving(true);
+        try {
+            await actions.create('payouts', { tech_id: techId, amount: Number(amount), mode: '', date: todayISO(), remarks, status: 'Requested', requested_by: user.email }, 'Withdrawal Requested', `${money(company, amount)}`);
+            actions.notify("Withdrawal requested");
+            onClose();
+        }
+        catch (err) { }
+        finally {
+            setSaving(false);
+        }
+    };
+    return (React.createElement("div", { className: "modal-overlay", onClick: e => { if (e.target === e.currentTarget)
+            onClose(); } },
+        React.createElement("div", { className: "modal" },
+            React.createElement("div", { className: "modal-head" },
+                React.createElement("h3", null, "Request Withdrawal"),
+                React.createElement("button", { className: "modal-close", onClick: onClose }, "\u2715")),
+            React.createElement("div", { className: "muted", style: { fontSize: 13, marginBottom: 12 } },
+                "Available to withdraw: ",
+                React.createElement("b", null, money(company, available))),
+            React.createElement("div", { className: "field" },
+                React.createElement("label", null, "Amount"),
+                React.createElement("input", { type: "number", min: "0", value: amount, onChange: e => setAmount(e.target.value), autoFocus: true })),
+            React.createElement("div", { className: "field" },
+                React.createElement("label", null, "Remarks"),
+                React.createElement("input", { type: "text", value: remarks, onChange: e => setRemarks(e.target.value) })),
+            React.createElement("div", { className: "flex gap-10", style: { justifyContent: 'flex-end' } },
+                React.createElement("button", { className: "btn", onClick: onClose }, "Cancel"),
+                React.createElement("button", { className: "btn btn-primary", onClick: save, disabled: saving }, saving ? 'Saving…' : 'Send Request')))));
+}
+const ATT_STATUSES = ['Present', 'Half Day', 'Leave', 'Absent'];
+function attBadge(status) {
+    const map = { 'Present': 'badge-green', 'Half Day': 'badge-amber', 'Leave': 'badge-copper', 'Absent': 'badge-red' };
+    return React.createElement("span", { className: "badge " + (map[status] || 'badge-teal') }, status);
+}
+function attSummary(att, techId, month) {
+    const rows = att.filter(a => a.tech_id === techId && (a.date || '').slice(0, 7) === month);
+    const c = { Present: 0, 'Half Day': 0, Leave: 0, Absent: 0 };
+    rows.forEach(r => { if (c[r.status] !== undefined)
+        c[r.status]++; });
+    return c;
+}
+function Attendance({ data, company, actions, isAdminOrSub, isTech, myTechnicianId, user }) {
+    const today = todayISO();
+    const [date, setDate] = useState(today);
+    const [month, setMonth] = useState(today.slice(0, 7));
+    const [remarks, setRemarks] = useState({});
+    const att = data.attendance || [];
+    const techs = data.technicians.filter(t => t.active !== false);
+    const recFor = (techId, d) => att.find(a => a.tech_id === techId && a.date === d);
+    const mark = async (techId, status) => {
+        const existing = recFor(techId, date);
+        const rem = remarks[techId] !== undefined ? remarks[techId] : (existing ? existing.remarks : '') || '';
+        const t = data.technicians.find(x => x.id === techId);
+        if (existing) {
+            await actions.update('attendance', existing.id, { status, remarks: rem, marked_by: user.email }, 'Attendance Updated', `${t ? t.name : ''} — ${date} — ${status}`);
+        }
+        else {
+            await actions.create('attendance', { tech_id: techId, date, status, remarks: rem, marked_by: user.email }, 'Attendance Marked', `${t ? t.name : ''} — ${date} — ${status}`);
+        }
+    };
+    if (isTech) {
+        const mine = att.filter(a => a.tech_id === myTechnicianId && (a.date || '').slice(0, 7) === month).sort((a, b) => b.date.localeCompare(a.date));
+        const todayRec = recFor(myTechnicianId, today);
+        const c = attSummary(att, myTechnicianId, month);
+        const checkIn = async () => {
+            await actions.create('attendance', { tech_id: myTechnicianId, date: today, status: 'Present', remarks: 'Self check-in', marked_by: user.email }, 'Attendance Marked', `${today} — Present (self check-in)`);
+            actions.notify("Marked present for today");
+        };
+        return (React.createElement("div", null,
+            React.createElement("div", { className: "card", style: { marginBottom: 16 } },
+                React.createElement("div", { className: "flex-between", style: { flexWrap: 'wrap', gap: 10 } },
+                    React.createElement("div", null,
+                        React.createElement("div", { className: "section-title", style: { marginBottom: 4 } },
+                            "Today \u2014 ",
+                            dLabel(today)),
+                        todayRec ? attBadge(todayRec.status) : React.createElement("span", { className: "muted" }, "Not marked yet")),
+                    !todayRec && React.createElement("button", { className: "btn btn-primary", onClick: checkIn }, "\u2713 Check In (Present)"))),
+            React.createElement("div", { className: "flex gap-10", style: { alignItems: 'flex-end', marginBottom: 14, flexWrap: 'wrap' } },
+                React.createElement("div", { className: "field", style: { marginBottom: 0 } },
+                    React.createElement("label", null, "Month"),
+                    React.createElement("input", { type: "month", value: month, onChange: e => setMonth(e.target.value) }))),
+            React.createElement("div", { className: "grid grid-4", style: { marginBottom: 16 } }, ATT_STATUSES.map(s => React.createElement("div", { className: "stat", key: s },
+                React.createElement("div", { className: "label" }, s),
+                React.createElement("div", { className: "value" }, c[s])))),
+            mine.length === 0 ? React.createElement("div", { className: "card empty" },
+                React.createElement("h4", null, "No attendance records this month")) : (React.createElement("div", { className: "table-wrap" },
+                React.createElement("table", null,
+                    React.createElement("thead", null,
+                        React.createElement("tr", null,
+                            React.createElement("th", null, "Date"),
+                            React.createElement("th", null, "Status"),
+                            React.createElement("th", null, "Remarks"))),
+                    React.createElement("tbody", null, mine.map(a => React.createElement("tr", { key: a.id },
+                        React.createElement("td", null, dLabel(a.date)),
+                        React.createElement("td", null, attBadge(a.status)),
+                        React.createElement("td", null, a.remarks || '—')))))))));
+    }
+    return (React.createElement("div", null,
+        React.createElement("div", { className: "card", style: { marginBottom: 20 } },
+            React.createElement("div", { className: "section-title" }, "Mark Attendance"),
+            React.createElement("div", { className: "field", style: { maxWidth: 220 } },
+                React.createElement("label", null, "Date"),
+                React.createElement("input", { type: "date", value: date, onChange: e => setDate(e.target.value) })),
+            techs.length === 0 ? React.createElement("div", { className: "muted" }, "No technicians yet.") : (React.createElement("div", { className: "table-wrap" },
+                React.createElement("table", null,
+                    React.createElement("thead", null,
+                        React.createElement("tr", null,
+                            React.createElement("th", null, "Technician"),
+                            React.createElement("th", null, "Status"),
+                            React.createElement("th", null, "Remarks"))),
+                    React.createElement("tbody", null, techs.map(t => {
+                        const rec = recFor(t.id, date);
+                        return (React.createElement("tr", { key: t.id },
+                            React.createElement("td", null, t.name),
+                            React.createElement("td", null,
+                                React.createElement("div", { className: "pill-filter" }, ATT_STATUSES.map(s => (React.createElement("button", { key: s, className: rec && rec.status === s ? 'active' : '', onClick: () => mark(t.id, s) }, s))))),
+                            React.createElement("td", null,
+                                React.createElement("input", { type: "text", style: { minWidth: 140 }, value: remarks[t.id] !== undefined ? remarks[t.id] : (rec ? rec.remarks || '' : ''), onChange: e => setRemarks({ ...remarks, [t.id]: e.target.value }), placeholder: "Optional" }))));
+                    })))))),
+        React.createElement("div", { className: "flex-between", style: { marginBottom: 12, flexWrap: 'wrap', gap: 10 } },
+            React.createElement("div", { className: "flex gap-10", style: { alignItems: 'flex-end' } },
+                React.createElement("div", { className: "field", style: { marginBottom: 0 } },
+                    React.createElement("label", null, "Summary month"),
+                    React.createElement("input", { type: "month", value: month, onChange: e => setMonth(e.target.value) }))),
+            React.createElement("button", { className: "btn btn-sm", onClick: () => csvDownload('attendance_' + month + '.csv', techs.map(t => {
+                    const c = attSummary(att, t.id, month);
+                    return { Technician: t.name, Month: month, Present: c.Present, HalfDay: c['Half Day'], Leave: c.Leave, Absent: c.Absent };
+                })) }, "Download Excel (CSV)")),
+        React.createElement("div", { className: "table-wrap" },
+            React.createElement("table", null,
+                React.createElement("thead", null,
+                    React.createElement("tr", null,
+                        React.createElement("th", null, "Technician"),
+                        React.createElement("th", { className: "right" }, "Present"),
+                        React.createElement("th", { className: "right" }, "Half Day"),
+                        React.createElement("th", { className: "right" }, "Leave"),
+                        React.createElement("th", { className: "right" }, "Absent"))),
+                React.createElement("tbody", null, techs.map(t => {
+                    const c = attSummary(att, t.id, month);
+                    return (React.createElement("tr", { key: t.id },
+                        React.createElement("td", null, t.name),
+                        React.createElement("td", { className: "num right" }, c.Present),
+                        React.createElement("td", { className: "num right" }, c['Half Day']),
+                        React.createElement("td", { className: "num right" }, c.Leave),
+                        React.createElement("td", { className: "num right" }, c.Absent)));
+                }))))));
+}
+function MasterReport({ data, company }) {
+    const [techFilter, setTechFilter] = useState('All');
+    const techs = data.technicians.filter(t => t.active !== false);
+    const techName = (id) => (data.technicians.find(x => x.id === id) || {}).name || '';
+    const buildSheets = () => {
+        const f = techFilter;
+        const byTech = (arr) => f === 'All' ? arr : arr.filter(r => r.tech_id === f);
+        const jobs = (data.jobs || []).filter(j => f === 'All' || j.assigned_tech_id === f);
+        const jobInvoiceIds = new Set(jobs.map(j => j.invoice_id).filter(Boolean));
+        const invoices = f === 'All' ? data.invoices : data.invoices.filter(i => jobInvoiceIds.has(i.id));
+        const sheets = {};
+        sheets['Invoices'] = invoices.map(i => ({ Number: i.number, Date: i.date, Customer: i.customer_name, Mobile: i.customer_mobile,
+            IMEI: i.imei || '', Total: Number(i.total), PaymentType: i.payment_type, Paid: Number(i.payment_type === 'Full' ? i.total : i.advance_paid || 0), Status: invoiceStatus(i) }));
+        if (f === 'All')
+            sheets['Quotations'] = data.quotations.map(q => ({ Number: q.number, Date: q.date, Customer: q.customer_name, Mobile: q.customer_mobile, Total: Number(q.total), Status: q.cancelled ? 'Cancelled' : 'Open' }));
+        sheets['Jobs'] = jobs.map(j => ({ JobNo: j.job_no, Type: j.type || 'Repair', Created: (j.created_at || '').slice(0, 10), Customer: j.customer_name, Mobile: j.customer_mobile,
+            IMEI: j.imei || '', Inch: j.inch || '', AssignedTo: techName(j.assigned_tech_id), Status: j.status, Collected: Number(j.amount_collected || 0), Invoice: j.invoice_number || '', Earning: Number(j.tech_earning || 0) }));
+        sheets['Technicians'] = techs.filter(t => f === 'All' || t.id === f).map(t => {
+            const s = techStats(data, t.id);
+            const b = techEarningBalance(data, t.id);
+            return { Name: t.name, Mobile: t.mobile || '', TotalCollection: s.totalCollected, TotalDeposited: s.totalDeposited, CashWithTech: s.cashWithTech, Due: s.totalDue,
+                ClosedJobs: b.closedJobs, TotalEarning: b.totalEarning, PaidOut: b.paid, EarningBalance: b.balance };
+        });
+        sheets['Collections'] = byTech(data.collections).map(c => ({ Date: c.date, Technician: techName(c.tech_id), Mode: c.mode, Amount: Number(c.amount), Reference: c.ref || '', Remarks: c.remarks || '' }));
+        sheets['Deposits'] = byTech(data.deposits).map(d => ({ Date: d.date, Technician: techName(d.tech_id), Mode: d.mode, Amount: Number(d.amount), Reference: d.ref || '', Remarks: d.remarks || '' }));
+        sheets['Payouts'] = byTech(data.payouts || []).map(p => ({ Date: p.paid_date || p.date, Technician: techName(p.tech_id), Status: p.status, Mode: p.mode || '', Amount: Number(p.amount), Remarks: p.remarks || '' }));
+        sheets['Attendance'] = byTech(data.attendance || []).map(a => ({ Date: a.date, Technician: techName(a.tech_id), Status: a.status, Remarks: a.remarks || '' }));
+        sheets['Stock Issued'] = byTech(data.stock_issues || []).map(s => ({ Date: s.date, Technician: techName(s.tech_id), Part: s.part_name, Code: s.part_code || '', Qty: Number(s.qty), Serial: s.serial || '' }));
+        sheets['Stock Used'] = byTech(data.stock_usage || []).map(s => ({ Date: s.date, Technician: techName(s.tech_id), Part: s.part_name, Qty: Number(s.qty), Type: s.type, Customer: s.customer || '', JobRef: s.job_ref || '' }));
+        sheets['Stock Returned'] = byTech(data.stock_returns || []).map(s => ({ Date: s.date, Technician: techName(s.tech_id), Part: s.part_name, Qty: Number(s.qty) }));
+        if (f === 'All') {
+            const office = officeCashLedger(data);
+            sheets['Office Cash'] = office.entries.map(e => ({ Date: e.date, Name: e.name, Type: e.type === 'in' ? 'Cash In' : 'Cash Out', Amount: Number(e.amount), Remarks: e.remarks || '' }));
+            sheets['Main Stock'] = data.main_stock.map(p => ({ Part: p.part_name, Code: p.part_code || '', Qty: Number(p.qty) }));
+            sheets['Catalog'] = data.catalog.map(c => ({ Name: c.name, Rate: Number(c.rate) }));
+        }
+        return sheets;
+    };
+    const download = () => {
+        const sheets = buildSheets();
+        const label = techFilter === 'All' ? 'all' : techName(techFilter).replace(/[^a-z0-9]+/gi, '-');
+        const base = `master-report-${company.name.replace(/[^a-z0-9]+/gi, '-')}-${label}-${todayISO()}`;
+        if (typeof XLSX !== 'undefined') {
+            const wb = XLSX.utils.book_new();
+            Object.keys(sheets).forEach(name => {
+                const rows = sheets[name].length ? sheets[name] : [{ '(no records)': '' }];
+                XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), name.slice(0, 31));
+            });
+            XLSX.writeFile(wb, base + '.xlsx');
+        }
+        else {
+            alert("The Excel library couldn't load (check your internet connection). Downloading a single CSV instead.");
+            const parts = [];
+            Object.keys(sheets).forEach(name => {
+                parts.push('\n"' + name.toUpperCase() + '"');
+                const rows = sheets[name];
+                if (!rows.length) {
+                    parts.push('"(no records)"');
+                    return;
+                }
+                const headers = Object.keys(rows[0]);
+                const esc = (v) => `"${String(v === undefined || v === null ? '' : v).replace(/"/g, '""')}"`;
+                parts.push(headers.map(esc).join(','));
+                rows.forEach(r => parts.push(headers.map(h => esc(r[h])).join(',')));
+            });
+            const blob = new Blob([parts.join('\n')], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = base + '.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    };
+    return (React.createElement("div", { className: "card", style: { maxWidth: 680 } },
+        React.createElement("div", { className: "section-title" }, "Master Report \u2014 Excel with a separate sheet for every register"),
+        React.createElement("div", { className: "muted", style: { fontSize: 13.5, marginBottom: 18 } }, "One Excel file, with separate sheets: Invoices, Quotations, Jobs, Technicians, Collections, Deposits, Payouts, Attendance, Stock Issued/Used/Returned, Office Cash, Main Stock and Catalog. Pick a technician to get only their records."),
+        React.createElement("div", { className: "field", style: { maxWidth: 320 } },
+            React.createElement("label", null, "Technician"),
+            React.createElement("select", { value: techFilter, onChange: e => setTechFilter(e.target.value) },
+                React.createElement("option", { value: "All" }, "All technicians (full report)"),
+                techs.map(t => React.createElement("option", { key: t.id, value: t.id }, t.name)))),
+        React.createElement("button", { className: "btn btn-primary", onClick: download }, "\u2B07 Download Master Report (Excel)")));
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App, null));
 
 </script>
