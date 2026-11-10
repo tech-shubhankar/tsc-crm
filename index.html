@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-<title>Ledger — Service &amp; Stock Register</title>
+<title>TSC — Service &amp; Stock Register</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
@@ -175,7 +175,7 @@
   .doc-qr img{ width:120px; height:120px; border:1px solid var(--line); border-radius:6px; }
   .doc-qr div{ font-size:11px; color:var(--text-mute); margin-top:6px; }
 
-  /* Theme: classic (default ledger look) */
+  /* Theme: classic (default TSC look) */
   .theme-classic .doc-head{ display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:16px; border-bottom:2px solid var(--ink); margin-bottom:16px; }
   .theme-classic .doc-title{ text-align:right; }
   .theme-classic .doc-title .tag{ font-size:22px; font-weight:700; letter-spacing:0.03em; font-family:'Fraunces',serif; }
@@ -17465,7 +17465,7 @@ const upiQrUrl = (company, amount) => {
     return `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(upiLink)}`;
 };
 const THEMES = [
-    { id: 'classic', label: 'Classic Ledger' },
+    { id: 'classic', label: 'Classic TSC' },
     { id: 'modern', label: 'Modern Dark Header' },
     { id: 'minimal', label: 'Minimal' },
     { id: 'colorful', label: 'Colorful Accent' },
@@ -17528,7 +17528,7 @@ function techStockList(dt, techId) {
     });
     return Object.values(map).map(p => ({ ...p, current: p.issued - p.used - p.damaged - p.returned }));
 }
-function officeCashLedger(dt) {
+function officeCashTSC(dt) {
     const fromDeposits = dt.deposits.filter(d => d.mode === 'Cash').map(d => {
         const t = dt.technicians.find(x => x.id === d.tech_id);
         return { id: 'dep-' + d.id, date: d.date, type: 'in', name: 'Deposit — ' + (t ? t.name : 'Technician'), amount: Number(d.amount), remarks: d.remarks || '', source: 'deposit' };
@@ -17670,7 +17670,7 @@ function statusBadge(status) {
 /* ============================================================
    Firebase bootstrap
    ============================================================ */
-const CFG_KEY = 'ledger_firebase_config_v1';
+const CFG_KEY = 'TSC_firebase_config_v1';
 const loadFbConfig = () => {
     try {
         const raw = localStorage.getItem(CFG_KEY);
@@ -17962,7 +17962,7 @@ function SetupScreen({ onDone }) {
     };
     return (React.createElement("div", { className: "login-screen" },
         React.createElement("div", { className: "login-card", style: { maxWidth: 480 } },
-            React.createElement("h1", null, "Ledger"),
+            React.createElement("h1", null, "TSC"),
             React.createElement("div", { className: "muted", style: { marginBottom: 20, fontSize: 13.5 } }, "Connect to your Firebase project (one-time setup)"),
             React.createElement("div", { className: "field" },
                 React.createElement("label", null, "Firebase config"),
@@ -18018,8 +18018,8 @@ function AuthScreen({ onReconfigure, hideReconfigure }) {
     };
     return (React.createElement("div", { className: "login-screen" },
         React.createElement("div", { className: "login-card" },
-            React.createElement("h1", null, "Ledger"),
-            React.createElement("div", { className: "muted", style: { marginBottom: 20, fontSize: 13.5 } }, "Service & Stock Register"),
+            React.createElement("h1", null, "TSC"),
+            React.createElement("div", { className: "muted", style: { marginBottom: 20, fontSize: 13.5 } }, "CRM Portal"),
             React.createElement("div", { className: "auth-toggle" },
                 React.createElement("button", { className: mode === 'signin' ? 'active' : '', onClick: () => { setMode('signin'); setError(''); } }, "Sign In"),
                 React.createElement("button", { className: mode === 'signup' ? 'active' : '', onClick: () => { setMode('signup'); setError(''); } }, "Sign Up")),
@@ -18128,7 +18128,7 @@ function Dashboard({ data, company, setRoute, isTech, myTechnicianId }) {
     }, 0);
     const techDue = data.technicians.reduce((s, t) => s + techStats(data, t.id).totalDue, 0);
     const techCash = data.technicians.reduce((s, t) => s + techStats(data, t.id).cashWithTech, 0);
-    const office = officeCashLedger(data);
+    const office = officeCashTSC(data);
     const recent = [...data.invoices].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
     return (React.createElement("div", null,
         React.createElement("div", { className: "grid grid-4", style: { marginBottom: 16 } },
@@ -19417,7 +19417,7 @@ function Deposit({ data, company, actions, isTech }) {
 function OfficeCash({ data, company, actions }) {
     const [showIn, setShowIn] = useState(false);
     const [showOut, setShowOut] = useState(false);
-    const office = officeCashLedger(data);
+    const office = officeCashTSC(data);
     const sorted = [...office.entries].sort((a, b) => b.date.localeCompare(a.date));
     const addEntry = async (type, name, amount, date, remarks) => {
         await actions.create('office_cash', { type, name, amount: Number(amount), date, remarks }, type === 'in' ? 'Cash In Recorded' : 'Cash Out Recorded', `${name} — ${money(company, amount)}`);
@@ -19446,13 +19446,13 @@ function OfficeCash({ data, company, actions }) {
                 React.createElement("div", { className: "label" }, "Total Cash Out / Expenses"),
                 React.createElement("div", { className: "value red" }, money(company, office.totalOut)))),
         React.createElement("div", { className: "flex-between", style: { marginBottom: 10 } },
-            React.createElement("div", { className: "section-title", style: { marginBottom: 0 } }, "Cash Ledger"),
-            React.createElement("button", { className: "btn btn-sm", onClick: () => csvDownload('office_cash_ledger.csv', sorted.map(e => ({
+            React.createElement("div", { className: "section-title", style: { marginBottom: 0 } }, "Cash TSC"),
+            React.createElement("button", { className: "btn btn-sm", onClick: () => csvDownload('office_cash_TSC.csv', sorted.map(e => ({
                     Date: e.date, Name: e.name, Type: e.type === 'in' ? 'Cash In' : 'Cash Out', Amount: e.amount, Remarks: e.remarks || ''
                 }))) }, "Download Excel (CSV)")),
         sorted.length === 0 ? React.createElement("div", { className: "card empty" },
             React.createElement("h4", null, "No cash movements yet"),
-            React.createElement("div", null, "Record a cash-in or an expense to start the ledger.")) : (React.createElement("div", { className: "table-wrap" },
+            React.createElement("div", null, "Record a cash-in or an expense to start the TSC.")) : (React.createElement("div", { className: "table-wrap" },
             React.createElement("table", null,
                 React.createElement("thead", null,
                     React.createElement("tr", null,
@@ -21110,7 +21110,7 @@ function CloseJobForm({ data, company, actions, job, onClose, onDone }) {
    Root App
    ============================================================ */
 function App() {
-    const embeddedConfig = (typeof window !== 'undefined' && window.__LEDGER_FIREBASE_CONFIG__) || null;
+    const embeddedConfig = (typeof window !== 'undefined' && window.__TSC_FIREBASE_CONFIG__) || null;
     const [fbConfig, setFbConfig] = useState(() => embeddedConfig || loadFbConfig());
     const [authChecked, setAuthChecked] = useState(false);
     const [user, setUser] = useState(null);
@@ -21292,14 +21292,14 @@ function App() {
     if (!authChecked)
         return React.createElement("div", { className: "login-screen" },
             React.createElement("div", { className: "login-card", style: { textAlign: 'center' } },
-                React.createElement("h1", null, "Ledger"),
+                React.createElement("h1", null, "TSC"),
                 React.createElement("div", { className: "muted", style: { marginTop: 10 } }, "Loading\u2026")));
     if (!user)
         return React.createElement(AuthScreen, { onReconfigure: () => { clearFbConfig(); setFbConfig(null); }, hideReconfigure: !!embeddedConfig });
     if (companies === null) {
         return (React.createElement("div", { className: "login-screen" },
             React.createElement("div", { className: "login-card", style: { textAlign: 'center' } },
-                React.createElement("h1", null, "Ledger"),
+                React.createElement("h1", null, "TSC"),
                 companiesError ? React.createElement(React.Fragment, null,
                     React.createElement("div", { style: { color: 'var(--red)', fontSize: 13, margin: '14px 0', textAlign: 'left', wordBreak: 'break-word' } }, companiesError),
                     React.createElement("div", { className: "muted", style: { fontSize: 12, marginBottom: 14, textAlign: 'left' } }, "If this mentions a missing index, click the link in the browser's console (F12 \u2192 Console tab) to create it in Firebase, wait a minute, then Retry. Don't create a new company to work around this \u2014 your existing one is still there."),
@@ -21310,7 +21310,7 @@ function App() {
     if (!data) {
         return (React.createElement("div", { className: "login-screen" },
             React.createElement("div", { className: "login-card", style: { textAlign: 'center' } },
-                React.createElement("h1", null, "Ledger"),
+                React.createElement("h1", null, "TSC"),
                 dataError ? React.createElement(React.Fragment, null,
                     React.createElement("div", { style: { color: 'var(--red)', fontSize: 13, margin: '14px 0' } }, dataError),
                     React.createElement("button", { className: "btn btn-primary btn-block", onClick: reloadData }, "Retry")) : React.createElement("div", { className: "muted", style: { marginTop: 10 } },
@@ -21403,8 +21403,8 @@ function App() {
         sidebarOpen && React.createElement("div", { className: "sidebar-scrim", onClick: () => setSidebarOpen(false) }),
         React.createElement("div", { className: "sidebar" + (sidebarOpen ? ' open' : '') },
             React.createElement("div", { className: "sidebar-brand" },
-                React.createElement("h1", null, "Ledger"),
-                React.createElement("span", null, "Service & Stock Register")),
+                React.createElement("h1", null, "TSC"),
+                React.createElement("span", null, "CRM Portal")),
             companies.length > 1 && (React.createElement("div", { className: "company-switcher" },
                 React.createElement("select", { value: company.id, onChange: e => { const c = companies.find(x => x.id === e.target.value); if (c)
                         setCompany(c); } }, companies.map(c => React.createElement("option", { key: c.id, value: c.id }, c.name))))),
@@ -21843,7 +21843,7 @@ function MasterReport({ data, company }) {
         sheets['Stock Used'] = byTech(data.stock_usage || []).map(s => ({ Date: s.date, Technician: techName(s.tech_id), Part: s.part_name, Qty: Number(s.qty), Type: s.type, Customer: s.customer || '', JobRef: s.job_ref || '' }));
         sheets['Stock Returned'] = byTech(data.stock_returns || []).map(s => ({ Date: s.date, Technician: techName(s.tech_id), Part: s.part_name, Qty: Number(s.qty) }));
         if (f === 'All') {
-            const office = officeCashLedger(data);
+            const office = officeCashTSC(data);
             sheets['Office Cash'] = office.entries.map(e => ({ Date: e.date, Name: e.name, Type: e.type === 'in' ? 'Cash In' : 'Cash Out', Amount: Number(e.amount), Remarks: e.remarks || '' }));
             sheets['Main Stock'] = data.main_stock.map(p => ({ Part: p.part_name, Code: p.part_code || '', Qty: Number(p.qty) }));
             sheets['Catalog'] = data.catalog.map(c => ({ Name: c.name, Rate: Number(c.rate) }));
